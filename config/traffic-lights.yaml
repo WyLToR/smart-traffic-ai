@@ -1,0 +1,14 @@
+# A profil az ellenőrzött videófájl SHA-256 lenyomatához kötött.
+# A típus kézi kamerabeállítás; a pillanatnyi színt a képből mérjük.
+profiles:
+  0880067fe1c79b31efba3fe9f22cb4bf75a6cdb27747d70ad8c76a5c54c729ca:
+    - id: center-ped
+      kind: pedestrian
+      bounds: [0.483, 0.389, 0.498, 0.465]
+    - id: left-ped
+      kind: pedestrian
+      bounds: [0.148, 0.455, 0.176, 0.55]
+  fb7aff2d08d8c8aa0000ce672185745a54cbfae6eb0b17e58426449a2fb3de02:
+    - id: crosswalk-ped
+      kind: pedestrian
+      bounds: [0.462, 0.285, 0.51, 0.47]

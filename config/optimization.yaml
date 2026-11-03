@@ -1,0 +1,4 @@
+green_candidates: [15, 25, 35]
+seeds: [42, 73]
+remaining_weight: 60.0
+max_wait_weight: 0.1
