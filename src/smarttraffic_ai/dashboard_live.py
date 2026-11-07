@@ -15,6 +15,13 @@ from smarttraffic_ai.live import LiveSession, fresh, validate_source
 
 
 def render_live_tab(root, has_yolo):
+    from smarttraffic_ai.dashboard_detection import (
+        detection_settings,
+        show_diagnostics,
+        show_processing,
+    )
+
+    config = detection_settings(root, "live")
     url = st.text_input(
         "Kameraoldal, videó vagy frissülő kép URL",
         value="https://www.idokep.hu/webkamera/hgabesz",
@@ -55,8 +62,13 @@ def render_live_tab(root, has_yolo):
         session = st.session_state.get("live_session")
         running = session is not None and session.running
         start, stop = st.columns(2)
-        if start.button("Élő elemzés indítása", disabled=not has_yolo or not valid or running):
-            session = LiveSession(root, url, regions, seconds, fps).start()
+        if start.button(
+            "Élő elemzés indítása",
+            disabled=(
+                not has_yolo or not valid or running or not (root / config.model_path).is_file()
+            ),
+        ):
+            session = LiveSession(root, url, regions, seconds, fps, config=config).start()
             st.session_state["live_session"] = session
         if stop.button("Élő elemzés leállítása", disabled=session is None or not session.running):
             session.stop()
@@ -107,19 +119,27 @@ def render_live_tab(root, has_yolo):
             )
             st.dataframe(light_rows(event["lights"]), hide_index=True, width="stretch")
         elif current:
-            st.dataframe(count_rows(event["summary"]), hide_index=True, width="stretch")
+            st.dataframe(
+                count_rows(event["summary"], detections=event.get("detections_by_category")),
+                hide_index=True,
+                width="stretch",
+            )
             st.dataframe(light_rows(event["lights"]), hide_index=True, width="stretch")
         else:
             st.info(
                 "Nincs friss elemzett kép. Az utolsó észlelés nem jelzi a jelenlegi lámpaállapotot."
             )
             st.dataframe(
-                count_rows(event["summary"], "Utolsó képkockán"),
+                count_rows(
+                    event["summary"], "Utolsó megerősített ID", event.get("detections_by_category")
+                ),
                 hide_index=True,
                 width="stretch",
             )
         if not snapshot:
             st.dataframe(track_rows(event["tracks"]), hide_index=True, width="stretch")
+        show_diagnostics(event.get("diagnostics"))
+        show_processing(event.get("config"), event.get("runtime"))
         if not session.running:
             saved = getattr(session, "result", None)
             if saved is not None:

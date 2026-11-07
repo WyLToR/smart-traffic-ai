@@ -17,12 +17,13 @@ from smarttraffic_ai.traffic_lights import (
 from smarttraffic_ai.video import process_video
 
 
-def count_rows(summary, current_label="Most látható"):
+def count_rows(summary, current_label="Most megerősített ID", detections=None):
     return [
         {
             "Kategória": CATEGORY_LABELS[name],
             current_label: summary["current_by_category"][name],
             "Összes követett ID": summary["by_category"][name],
+            **({"Képkockán felismert objektum": detections[name]} if detections else {}),
         }
         for name in TRAFFIC_CATEGORIES
     ]
@@ -141,11 +142,27 @@ def configure_lights(root, path=None, source_key="live"):
 
 
 def show_video_result(result):
+    from smarttraffic_ai.dashboard_detection import show_counts, show_processing
+
     st.subheader(f"Eredmény: {result['input_name']}")
+    show_processing(
+        result.get("config"),
+        result.get("runtime"),
+        result["processing_seconds"],
+        result.get("processing_fps"),
+    )
     st.video(result["video_path"])
     st.metric("Összes megerősített azonosító", result["summary"]["total_unique"])
+    show_counts(
+        result["summary"]["by_category"],
+        "A teljes videó megerősített ID-i, nem áthaladási események.",
+    )
     st.dataframe(
-        count_rows(result["summary"], "Utolsó képkockán"), hide_index=True, width="stretch"
+        count_rows(
+            result["summary"], "Utolsó megerősített ID", result.get("last_detections_by_category")
+        ),
+        hide_index=True,
+        width="stretch",
     )
     st.dataframe(track_rows(result["tracks"]), hide_index=True, width="stretch")
     st.subheader("Jelzőlámpák az utolsó képkockán")
@@ -170,6 +187,7 @@ def show_video_result(result):
         ("annotated.mp4", "Jelölt videó letöltése", "video/mp4"),
         ("tracks.csv", "Azonosítók és látható idők (CSV)", "text/csv"),
         ("analysis.json", "Teljes elemzés (JSON)", "application/json"),
+        ("detections.jsonl", "Képkockánkénti felismerések (JSONL)", "application/x-ndjson"),
         ("timeline.csv", "Képkockánkénti számlálás (CSV)", "text/csv"),
         ("traffic-lights.csv", "Lámpák állapota és típusa (CSV)", "text/csv"),
     ]:
@@ -193,6 +211,9 @@ def render_video_tab(root: Path, has_yolo: bool):
 
         render_live_tab(root, has_yolo)
         return
+    from smarttraffic_ai.dashboard_detection import detection_settings, show_diagnostics
+
+    config = detection_settings(root, "video")
     session = st.session_state.get("live_session")
     if session is not None:
         session.stop()
@@ -229,7 +250,15 @@ def render_video_tab(root: Path, has_yolo: bool):
         "A látható idő csak az észlelt képkockák ideje; az első–utolsó időszak "
         "a köztes kihagyásokat is tartalmazza. Az idők a videó idővonalán értendők."
     )
-    if st.button("Videó feldolgozása", disabled=not has_yolo or path is None or calibration_error):
+    if st.button(
+        "Videó feldolgozása",
+        disabled=(
+            not has_yolo
+            or path is None
+            or calibration_error
+            or not (root / config.model_path).is_file()
+        ),
+    ):
         st.session_state.pop("video_result", None)
         progress = st.progress(0.0, text="Videó megnyitása és modellbetöltés…")
         preview = st.empty()
@@ -242,17 +271,28 @@ def render_video_tab(root: Path, has_yolo: bool):
             progress.progress(
                 ratio,
                 text=f"{event['seconds']:.1f} s feldolgozva · "
-                f"összes ID: {event['summary']['total_unique']}",
+                f"összes ID: {event['summary']['total_unique']}"
+                + (
+                    f" · {event['runtime']['warnings'][-1]}"
+                    if event.get("runtime", {}).get("warnings")
+                    else ""
+                ),
             )
             preview.image(
                 frame, channels="BGR", caption="Feldolgozás közbeni előnézet", width="stretch"
             )
-            counts.dataframe(count_rows(event["summary"]), hide_index=True, width="stretch")
+            counts.dataframe(
+                count_rows(event["summary"], detections=event["detections_by_category"]),
+                hide_index=True,
+                width="stretch",
+            )
             tracks.dataframe(track_rows(event["tracks"]), hide_index=True, width="stretch")
             light_table.dataframe(light_rows(event["lights"]), hide_index=True, width="stretch")
 
         try:
-            result = process_video(root, path, on_progress=update, light_regions=light_regions)
+            result = process_video(
+                root, path, on_progress=update, light_regions=light_regions, config=config
+            )
             st.session_state["video_result"] = result
             progress.progress(1.0, text="Az elemzés elkészült.")
             preview.empty()
@@ -264,6 +304,7 @@ def render_video_tab(root: Path, has_yolo: bool):
             st.error(f"A videó feldolgozása nem sikerült: {exc}")
     if "video_result" in st.session_state:
         show_video_result(st.session_state["video_result"])
+        show_diagnostics(st.session_state["video_result"].get("diagnostics"))
     elif not has_yolo:
         st.info("A videóelemzéshez YOLO-modell és a vision függőségek szükségesek.")
     if "video_result" not in st.session_state:

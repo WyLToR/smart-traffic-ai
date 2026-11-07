@@ -40,6 +40,32 @@ A három beépített forgatókönyv: `balanced`, `rush-hour`, `variable`. Mindeg
 
 A dashboard **Videóelemzés** lapján feltölthetsz MP4-et, vagy választhatsz a letöltött mintavideók közül. A **Videó feldolgozása** gomb után látszik az előnézet, a pillanatnyi és az összesített számláló, valamint az éppen látott azonosítók ideje.
 
+A kép-, videó- és élő feldolgozásnál három **Feldolgozási profil** választható:
+
+| Profil | Modell | Képméret | Confidence | Maximum találat |
+|---|---|---:|---:|---:|
+| Villámgyors | YOLO11n | 640 | 0,25 | 300 |
+| Kiegyensúlyozott (alap) | YOLO26n | 960 | 0,20 | 500 |
+| Részletes | YOLO26l | 1280 | 0,15 | 1000 |
+
+A **Haladó felismerési beállítások** panelen a méret, küszöb és kategóriák módosíthatók.
+Ez nem írja át a konfigurációs fájlt. A Részletes profil CPU-n lassú: a helyi mérésben
+egy 2 másodperces videó feldolgozása kb. 69 másodperc volt. A nagyobb modell nem garantál
+minden kamerán jobb pontosságot. A profilok nem hagynak ki MP4-képkockákat.
+
+Hiányzó modell a panelen vagy parancssorból tölthető le, hivatalos Ultralytics-forrásból:
+
+```bash
+uv run --no-sync python -m smarttraffic_ai download-model --profile detailed
+uv run --no-sync python -m smarttraffic_ai detect --input kep.jpg --profile balanced
+uv run --no-sync python -m smarttraffic_ai analyze-video --input video.mp4 --profile fast
+```
+
+Mért idők, cache és memóriahiba esetén történő visszalépés: [feldolgozási profilok](docs/processing-profiles.md).
+Az ID nélküli felismerések is kapnak dobozt; a képkocka találatai, az aktív ID-k és a megerősített
+egyedi ID-k külön számok. A részletes diagnosztika külön kapcsolható be.
+Mérések és korlátok: [felismerési audit](docs/detection-audit.md).
+
 Csak autó, busz, teherautó, motorkerékpár, kerékpár és gyalogos szerepel a kimenetben. Táska és más, közlekedéshez nem szükséges kategória ki van szűrve. Az összesítő legalább 3 észlelést és fél másodperc látható időt vár meg. Egy ID-t egyszer számol, de hosszabb takarás után ugyanaz a közlekedő új ID-t kaphat.
 
 Az elemzés végén lejátszható és letölthető a jelölt videó. CSV/JSON tartalmazza az első és utolsó észlelést, az összes látható időt és a képkockánkénti számokat. A látható időből a kihagyott képkockák kimaradnak. Az első–utolsó időszak ezeket a réseket is tartalmazza.

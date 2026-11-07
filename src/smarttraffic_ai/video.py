@@ -11,13 +11,16 @@ import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable
 
 from smarttraffic_ai.config import load_yaml
 from smarttraffic_ai.detection import (
     TRAFFIC_CATEGORIES,
     DetectionConfig,
+    TrackedObject,
     YoloDetector,
+    predict_frame,
 )
 from smarttraffic_ai.simulation import output_directory, save_csv, save_json
 from smarttraffic_ai.traffic_lights import (
@@ -26,14 +29,6 @@ from smarttraffic_ai.traffic_lights import (
     annotate_lights,
     regions_for_video,
 )
-
-
-@dataclass(frozen=True)
-class TrackedObject:
-    track_id: int
-    category: str
-    confidence: float
-    bbox: tuple[float, float, float, float]
 
 
 @dataclass
@@ -85,7 +80,7 @@ class TrackCounter:
         # One ID contributes at most once per frame, even with duplicate boxes.
         unique = {}
         for obj in objects:
-            if obj.category not in TRAFFIC_CATEGORIES or obj.track_id < 1:
+            if obj.category not in TRAFFIC_CATEGORIES or obj.track_id is None or obj.track_id < 1:
                 continue
             if obj.track_id not in unique or unique[obj.track_id].confidence < obj.confidence:
                 unique[obj.track_id] = obj
@@ -127,31 +122,63 @@ class TrackCounter:
 
 
 def _objects(detector, frame, tracker_path, low_threshold):
-    result = detector.model.track(
-        frame,
-        persist=True,
-        tracker=str(tracker_path),
-        classes=detector.class_ids + detector.light_class_ids,
-        conf=low_threshold,
-        imgsz=detector.config.image_size,
-        device=detector.config.device,
-        agnostic_nms=True,
-        verbose=False,
-    )[0]
-    boxes = result.boxes
-    if boxes is None or not boxes.is_track:
-        return []
-    return [
-        TrackedObject(int(track_id), result.names[int(category)], float(confidence), tuple(bbox))
-        for bbox, track_id, category, confidence in zip(
-            boxes.xyxy.cpu().tolist(),
-            boxes.id.cpu().tolist(),
-            boxes.cls.cpu().tolist(),
-            boxes.conf.cpu().tolist(),
-            strict=True,
+    import numpy as np
+    import yaml
+    from ultralytics.engine.results import Boxes
+    from ultralytics.trackers.byte_tracker import BYTETracker
+
+    result, selected = predict_frame(
+        detector, frame, include_lights=True, low_threshold=low_threshold
+    )
+    if not hasattr(detector, "tracker"):
+        settings = yaml.safe_load(Path(tracker_path).read_text(encoding="utf-8"))
+        detector.tracker = BYTETracker(SimpleNamespace(**settings))
+    ids = {name: key for key, name in result.names.items()}
+    boxes = Boxes(
+        np.asarray(
+            [[*row["bbox"], row["confidence"], ids[row["category"]]] for row in selected],
+            dtype=np.float32,
+        ).reshape(-1, 6),
+        frame.shape[:2],
+    )
+    started = time.perf_counter()
+    tracks = detector.tracker.update(boxes, frame)
+    tracking_seconds = time.perf_counter() - started
+    height, width = frame.shape[:2]
+    assigned = {}
+    clipped_count = 0
+    for row in tracks:
+        index = int(row[-1])
+        bbox = tuple(
+            max(0.0, min(float(value), bound))
+            for value, bound in zip(row[:4], (width, height, width, height), strict=True)
         )
-        if result.names[int(category)] in (*detector.config.classes, "traffic light")
+        clipped_count += int(any(a != b for a, b in zip(bbox, row[:4], strict=True)))
+        if not (bbox[0] < bbox[2] and bbox[1] < bbox[3]):
+            bbox = tuple(selected[index]["bbox"])
+        assigned[index] = (int(row[4]), bbox)
+    objects = [
+        TrackedObject(
+            assigned[index][0] if index in assigned else None,
+            row["category"],
+            row["confidence"],
+            assigned[index][1] if index in assigned else tuple(row["bbox"]),
+            row["confidence"] >= detector.config.confidence,
+        )
+        for index, row in enumerate(selected)
+        if row["confidence"] >= detector.config.confidence or index in assigned
     ]
+    detector.last_diagnostics.update(
+        tracking_id_count=sum(obj.track_id is not None for obj in objects),
+        tracking_seconds=tracking_seconds,
+        tracking_boxes_clipped=clipped_count,
+        displayed_count=sum(obj.category in TRAFFIC_CATEGORIES for obj in objects),
+        exported_count=sum(obj.category in TRAFFIC_CATEGORIES for obj in objects),
+        threshold_detections_count=sum(
+            obj.category in TRAFFIC_CATEGORIES and obj.above_threshold for obj in objects
+        ),
+    )
+    return objects
 
 
 def _annotate(frame, objects, counter):
@@ -163,6 +190,18 @@ def _annotate(frame, objects, counter):
     for obj in objects:
         track = counter.tracks.get(obj.track_id)
         if track is None:
+            if obj.category in TRAFFIC_CATEGORIES:
+                x1, y1, x2, y2 = map(int, obj.bbox)
+                cv2.rectangle(image, (x1, y1), (x2, y2), (255, 180, 0), 2)
+                cv2.putText(
+                    image,
+                    f"{obj.category} {obj.confidence:.2f} (no ID)",
+                    (x1, max(15, y1 - 4)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.43,
+                    (255, 180, 0),
+                    1,
+                )
             continue
         x1, y1, x2, y2 = (int(value) for value in obj.bbox)
         color = (0, 210, 100) if counter.is_confirmed(track) else (0, 180, 255)
@@ -194,10 +233,13 @@ def _annotate(frame, objects, counter):
                 cv2.LINE_AA,
             )
     summary = counter.summary()
+    detected = sum(obj.category in TRAFFIC_CATEGORIES and obj.above_threshold for obj in objects)
+    active = sum(obj.category in TRAFFIC_CATEGORIES and obj.track_id is not None for obj in objects)
     cv2.rectangle(image, (0, 0), (width, min(height, 32)), (25, 25, 25), -1)
     cv2.putText(
         image,
-        f"Most: {summary['current_total']} | Osszes ID: {summary['total_unique']}",
+        f"Det: {detected} | ID: {active} | Megerositett: {summary['current_total']} "
+        f"| Osszes ID: {summary['total_unique']}",
         (8, 23),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.6,
@@ -213,6 +255,7 @@ def process_video(
     path: Path,
     on_progress: Callable | None = None,
     light_regions: list[LightRegion] | None = None,
+    config: DetectionConfig | None = None,
 ) -> dict:
     import cv2
 
@@ -223,8 +266,9 @@ def process_video(
         raise FileNotFoundError("A jelölt MP4 mentéséhez FFmpeg szükséges a PATH-ban.")
     if importlib.util.find_spec("lap") is None:
         raise ImportError("A követéshez telepítsd: uv pip install -e '.[vision]'.")
-    config = load_yaml(root / "config/detection.yaml", DetectionConfig)
-    input_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    config = config or load_yaml(root / "config/detection.yaml", DetectionConfig)
+    with path.open("rb") as stream:
+        input_sha = hashlib.file_digest(stream, "sha256").hexdigest()
     lights = LightAnalyzer(
         regions_for_video(root, input_sha) if light_regions is None else light_regions
     )
@@ -240,7 +284,17 @@ def process_video(
         if not ok:
             raise ValueError("A videóban nincs dekódolható képkocka.")
         width, height = frame.shape[1], frame.shape[0]
+        loading_started = time.perf_counter()
         detector = YoloDetector(root, config)
+        timings = {
+            "model_load_seconds": time.perf_counter() - loading_started,
+            "decode_seconds": 0.0,
+            "inference_seconds": 0.0,
+            "tracking_seconds": 0.0,
+            "annotation_seconds": 0.0,
+            "encoder_write_seconds": 0.0,
+            "preview_seconds": 0.0,
+        }
         directory = output_directory(root, "video")
         # Low-confidence matches preserve existing IDs, but cannot open new tracks.
         import yaml
@@ -268,6 +322,7 @@ def process_video(
         with (
             (directory / "encoder.log").open("w", encoding="utf-8") as log,
             (directory / "observations.jsonl").open("w", encoding="utf-8") as observations,
+            (directory / "detections.jsonl").open("w", encoding="utf-8") as detections,
         ):
             encoder = subprocess.Popen(
                 [
@@ -307,7 +362,11 @@ def process_video(
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
             while ok:
+                if frame.shape[:2] != (height, width):
+                    raise ValueError("A videó képmérete feldolgozás közben megváltozott.")
+                decoding_started = time.perf_counter()
                 next_ok, next_frame = capture.read()
+                timings["decode_seconds"] += time.perf_counter() - decoding_started
                 next_seconds = capture.get(cv2.CAP_PROP_POS_MSEC) / 1000
                 if not next_ok or not math.isfinite(next_seconds) or next_seconds <= seconds:
                     next_seconds = seconds + 1 / fps
@@ -315,6 +374,42 @@ def process_video(
                 duration = next_seconds - seconds
                 objects = _objects(detector, frame, tracker_path, low_threshold)
                 counter.update(seconds, duration, objects)
+                current = [obj for obj in objects if obj.category in TRAFFIC_CATEGORIES]
+                detector_diagnostics = getattr(detector, "last_diagnostics", {})
+                timings["inference_seconds"] += detector_diagnostics.get("inference_seconds", 0)
+                timings["tracking_seconds"] += detector_diagnostics.get("tracking_seconds", 0)
+                detected_counts = {
+                    name: sum(obj.category == name and obj.above_threshold for obj in current)
+                    for name in TRAFFIC_CATEGORIES
+                }
+                detections.write(
+                    json.dumps(
+                        {
+                            "seconds": seconds,
+                            "frame_index": index,
+                            "objects": [
+                                {
+                                    "track_id": obj.track_id,
+                                    "category": obj.category,
+                                    "confidence": obj.confidence,
+                                    "above_threshold": obj.above_threshold,
+                                    "bbox": list(obj.bbox),
+                                }
+                                for obj in current
+                            ],
+                            **(
+                                {
+                                    "diagnostics": detector_diagnostics,
+                                    "raw_detections": getattr(detector, "last_raw", []),
+                                }
+                                if config.diagnostics
+                                else {}
+                            ),
+                        },
+                        allow_nan=False,
+                    )
+                    + "\n"
+                )
                 observations.write(
                     json.dumps(
                         {
@@ -333,18 +428,22 @@ def process_video(
                                     ],
                                 }
                                 for obj in objects
-                                if obj.category in TRAFFIC_CATEGORIES
+                                if obj.category in TRAFFIC_CATEGORIES and obj.track_id is not None
                             ],
                         },
                         allow_nan=False,
                     )
                     + "\n"
                 )
+                drawing_started = time.perf_counter()
                 image = _annotate(frame, objects, counter)
                 light_readings = lights.update(frame, objects, seconds, duration)
                 annotate_lights(image, light_readings)
+                timings["annotation_seconds"] += time.perf_counter() - drawing_started
                 try:
+                    encoding_started = time.perf_counter()
                     encoder.stdin.write(image.tobytes())
+                    timings["encoder_write_seconds"] += time.perf_counter() - encoding_started
                 except BrokenPipeError as exc:
                     raise RuntimeError(
                         "Az FFmpeg nem tudta menteni a videót; lásd encoder.log."
@@ -357,11 +456,14 @@ def process_video(
                         "seconds": seconds,
                         "current_total": summary["current_total"],
                         "total_unique": summary["total_unique"],
+                        "detections": sum(obj.above_threshold for obj in current),
+                        "active_tracks": sum(obj.track_id is not None for obj in current),
                         **summary["current_by_category"],
                     }
                 )
                 now = time.perf_counter()
                 if on_progress and (now - last_update >= 0.3 or not next_ok):
+                    preview_started = time.perf_counter()
                     on_progress(
                         {
                             "frame": index,
@@ -370,9 +472,15 @@ def process_video(
                             "summary": summary,
                             "tracks": counter.rows(current_only=True),
                             "lights": light_readings,
+                            "detections_by_category": detected_counts,
+                            "diagnostics": detector_diagnostics,
+                            "runtime": detector.runtime_info()
+                            if hasattr(detector, "runtime_info")
+                            else {},
                         },
                         image,
                     )
+                    timings["preview_seconds"] += time.perf_counter() - preview_started
                     last_update = now
                 frame, ok, seconds = next_frame, next_ok, next_seconds
             encoder.stdin.close()
@@ -391,8 +499,11 @@ def process_video(
             "frames": index,
             "duration_seconds": seconds,
             "processing_seconds": time.perf_counter() - started,
+            "timings": timings,
             "timestamp_fallback_frames": fallback_timestamps,
-            "config": config.model_dump(),
+            "config": getattr(detector, "config", config).model_dump(),
+            "runtime": detector.runtime_info() if hasattr(detector, "runtime_info") else {},
+            "processing_fps": index / max(time.perf_counter() - started, 1e-9),
             "tracker": tracker_config,
             "min_observations": counter.min_observations,
             "min_visible_seconds": counter.min_visible_seconds,
@@ -400,6 +511,8 @@ def process_video(
             "tracks": counter.rows(),
             "traffic_lights": lights.summary(),
             "last_light_readings": light_readings,
+            "last_detections_by_category": detected_counts,
+            "diagnostics": detector_diagnostics if config.diagnostics else None,
             "light_regions": [r.model_dump() for r in lights.regions],
             "directory": str(directory),
             "video_path": str(final_path),

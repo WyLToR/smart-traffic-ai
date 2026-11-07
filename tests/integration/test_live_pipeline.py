@@ -24,7 +24,7 @@ def test_snapshot_counts_are_per_image_without_track_ids_or_durations():
     result = SimpleNamespace(boxes=[box(0), box(0), box(1)], names={0: "car", 1: "handbag"})
     detector = SimpleNamespace(
         model=SimpleNamespace(predict=lambda *args, **kwargs: [result]),
-        config=SimpleNamespace(confidence=0.35, image_size=640, device="cpu"),
+        config=live.DetectionConfig(confidence=0.35, image_size=640, device="cpu"),
         class_ids=[0],
         light_class_ids=[],
     )
@@ -124,6 +124,9 @@ def test_hls_segment_delivery_is_paced_and_stoppable(tmp_path, monkeypatch):
 
 @pytest.fixture
 def fake_live_source(monkeypatch):
+    (project_root() / "models").mkdir()
+    (project_root() / "models/yolo26n.pt").touch()
+
     class Reader:
         def __init__(self, source, stop):
             self.stop = stop
@@ -274,7 +277,7 @@ def test_dashboard_live_start_stop_and_blob_error(fake_live_source):
     ).run()
     app.radio[0].set_value("Élő forrás").run()
     assert not app.exception
-    app.button[0].click().run()
+    next(b for b in app.button if b.label == "Élő elemzés indítása").click().run()
     session = app.session_state["live_session"]
     try:
         assert session.running
@@ -282,7 +285,7 @@ def test_dashboard_live_start_stop_and_blob_error(fake_live_source):
         app.run()
         assert not app.exception
         assert len(app.dataframe) >= 2
-        app.button[1].click().run()
+        next(b for b in app.button if b.label == "Élő elemzés leállítása").click().run()
         session.thread.join(3)
         assert not session.running
         app.run()
@@ -290,7 +293,7 @@ def test_dashboard_live_start_stop_and_blob_error(fake_live_source):
         assert app.session_state["live_result"]["directory"] == session.result["directory"]
         app.text_input[0].set_value("blob:https://camera/123").run()
         assert app.error
-        assert app.button[0].disabled
+        assert next(b for b in app.button if b.label == "Élő elemzés indítása").disabled
     finally:
         session.stop()
         session.thread.join(3)
@@ -318,7 +321,7 @@ def test_dashboard_snapshot_has_per_image_counts(fake_live_source, monkeypatch):
         "render_video_tab(project_root(), True)\n"
     ).run()
     app.radio[0].set_value("Élő forrás").run()
-    app.button[0].click().run()
+    next(b for b in app.button if b.label == "Élő elemzés indítása").click().run()
     session = app.session_state["live_session"]
     try:
         time.sleep(0.1)

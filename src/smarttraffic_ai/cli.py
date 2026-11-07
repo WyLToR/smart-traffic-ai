@@ -34,8 +34,14 @@ def main(argv=None) -> int:
     command.add_argument("--input", required=True, help="Kép elérési útja")
     command.add_argument("--mock", action="store_true", help="Kifejezetten szintetikus tesztadat")
     command.add_argument("--timestamp", help="A felvétel ISO 8601 időbélyege, időzónával")
+    command.add_argument("--profile", choices=["fast", "balanced", "detailed"])
     command = sub.add_parser("analyze-video", help="MP4 követése, számlálás és láthatósági idők")
     command.add_argument("--input", required=True, help="MP4-videó elérési útja")
+    command.add_argument("--profile", choices=["fast", "balanced", "detailed"])
+    command = sub.add_parser(
+        "download-model", help="Hivatalos YOLO-modell letöltése és ellenőrzése"
+    )
+    command.add_argument("--profile", required=True, choices=["fast", "balanced", "detailed"])
     command = sub.add_parser("estimate", help="Detektálási JSON-ból feltételezett forgatókönyvek")
     command.add_argument("--input", required=True)
     command.add_argument(
@@ -74,6 +80,15 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         root = project_root()
+        profile_config = None
+        if args.command in {"detect", "analyze-video"} and args.profile:
+            from smarttraffic_ai.config import load_yaml
+            from smarttraffic_ai.detection import DetectionConfig
+            from smarttraffic_ai.profiles import DETECTION_PROFILES
+
+            profile_config = DETECTION_PROFILES[args.profile].apply(
+                load_yaml(root / "config/detection.yaml", DetectionConfig)
+            )
         if args.command == "build-network":
             print(f"Elkészült: {build_network(root)}")
         elif args.command in {"simulate", "demo", "optimize"}:
@@ -101,15 +116,26 @@ def main(argv=None) -> int:
 
             from smarttraffic_ai.detection import detect_file
 
-            print(detect_file(root, Path(args.input), args.mock, args.timestamp))
+            print(
+                detect_file(
+                    root, Path(args.input), args.mock, args.timestamp, config=profile_config
+                )
+            )
         elif args.command == "analyze-video":
             from pathlib import Path
 
             from smarttraffic_ai.video import process_video
 
-            result = process_video(root, Path(args.input))
+            result = process_video(root, Path(args.input), config=profile_config)
             print(f"Összes követett ID: {result['summary']['total_unique']}")
             print(f"Eredmények: {result['directory']}")
+        elif args.command == "download-model":
+            from pathlib import Path
+
+            from smarttraffic_ai.model_store import download_model
+            from smarttraffic_ai.profiles import DETECTION_PROFILES
+
+            print(download_model(root, Path(DETECTION_PROFILES[args.profile].model_path).name))
         elif args.command == "estimate":
             from pathlib import Path
 

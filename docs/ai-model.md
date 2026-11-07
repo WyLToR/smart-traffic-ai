@@ -1,6 +1,9 @@
 # Kép- és videófeldolgozás
 
-A `config/detection.yaml` adja meg a modellt, a confidence küszöböt, a bemeneti méretet, az eszközt és a régiókat. Alapértékek: `models/yolo11n.pt`, 0,35, 640, CPU.
+A `config/detection.yaml` adja meg a modellt, a confidence küszöböt, a bemeneti méretet,
+az eszközt és a régiókat. A jelenlegi alap a Kiegyensúlyozott profil:
+`models/yolo26n.pt`, confidence 0,20, méret 960, max_det 500, CPU.
+A három profil a meglévő `DetectionConfig` sémára épül; részletek: [profilok](processing-profiles.md).
 
 ## Telepítés
 
@@ -19,11 +22,17 @@ uv pip install --python .venv/Scripts/python.exe --no-cache -e ".[dev,sumo,visio
 
 A közös `uv.lock` ettől eltérő PyTorchot rögzíthet. A külön telepített környezetben `uv run --no-sync` használható; újraszinkronizálás után a fenti parancsokkal állítható vissza a CPU-s változat.
 
-A [YOLO11n súlyfájlt](https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt) helyezd a `models/` mappába. A program nem tölti le automatikusan. A modellfájlok Gitből kizártak. Felhasználási feltételek: [Ultralytics licence](https://www.ultralytics.com/license).
+A súlyfájlok a Gitből kizárt `models/` mappába kerülnek. A program csak kifejezett kérésre
+tölt le, a `download-model` paranccsal vagy a felület modellkezelő gombjával. A letöltés
+után ellenőrzi a betölthetőséget és az osztályokat. Felhasználási feltételek:
+[Ultralytics licence](https://www.ultralytics.com/license).
 
 ## Feldolgozás
 
-A PIL beolvassa a JPG/PNG képet, az OpenCV BGR-re alakítja. A méretezést és az inferenciát az Ultralytics `predict` végzi. A konfiguráció csak `car`, `bus`, `truck`, `motorcycle`, `bicycle` és `person` osztályneveket enged. Ezek ID-listáját már a modellhívás megkapja. Az osztályfüggetlen NMS csökkenti a közel azonos, eltérő kategóriájú dobozok ismétlődését.
+A PIL beolvassa és az EXIF szerint forgatja a JPG/PNG képet, az OpenCV BGR-re alakítja.
+A méretezést és az inferenciát az Ultralytics `predict` végzi. A konfiguráció csak `car`,
+`bus`, `truck`, `motorcycle`, `bicycle` és `person` osztályneveket enged. Az NMS osztályonkénti,
+hogy például egy személy és kerékpár egymást átfedő doboza ne nyomja el egymást.
 
 A régiók normalizált, nem átfedő téglalapok. A hozzárendelés a befoglaló doboz alsó középpontja alapján történik; közös határvonalon az első konfigurált régió dönt. Régión kívüli objektumnál az irány ismeretlen. A mellékelt régiókat kameranézetenként be kell állítani.
 
@@ -35,7 +44,10 @@ A YOLO11n CPU-inferenciája mintaképeken és videókon ellenőrzött. Ez nem ka
 
 ## Videó és követés
 
-A `video.py` egy videóhoz egyszer tölti be a modellt. A képkockák között ByteTrack és `persist=True` tartja meg az azonosítókat. Új ID a konfigurált confidence küszöbtől indulhat; a meglévő ID megtartásához gyengébb találat is használható. A követő 30 képkockányi kimaradást tart fenn, de ez nem garantál helyes újraazonosítást.
+A `video.py` egy videóhoz egyszer kér modellt a cache-ből. A követő minden videóhoz új
+ByteTrack-példány, amely megmarad a képkockák között. Új ID a konfigurált confidence
+küszöbtől indulhat; a meglévő ID megtartásához gyengébb találat is használható. A követő
+30 képkockányi kimaradást tart fenn, ami nem garantál helyes újraazonosítást.
 
 Egy ID legalább 3 megfigyelés és 0,5 s összes látható idő után kerül a számlálóba. A kategóriát az eddigi találatok confidence-szel súlyozott szavazata adja; egy ID kategóriaváltása nem hoz létre új objektumot. A narancssárga doboz még nem megerősített, a zöld már összesített azonosítót jelöl.
 
@@ -46,7 +58,20 @@ Egy ID legalább 3 megfigyelés és 0,5 s összes látható idő után kerül a 
 
 Az időalap az OpenCV dekódolt időbélyege. Hiányzó vagy nem növekvő időbélyegnél FPS-alapú lépés helyettesíti, ezt a JSON számlálja. A feldolgozás falióraideje külön mező. A videók között nincs közös követőállapot.
 
-A kimenet `outputs/video-*` alatt: `annotated.mp4`, `analysis.json`, `tracks.csv`, `timeline.csv`, a tényleges `tracker.yaml` és az encoder naplója. A jelölt MP4 H.264, hang nélkül; a böngészős lejátszáshoz a rendszerre telepített FFmpeg kell (`ffmpeg -version`). A kimenet állandó FPS-re normalizált, ezért változó FPS bemenetnél a lejátszás időalapja eltérhet az exportált eredeti időbélyegektől.
+A kimenet `outputs/video-*` alatt: `annotated.mp4`, `analysis.json`, `tracks.csv`, `timeline.csv`,
+`detections.jsonl`, `observations.jsonl`, a tényleges `tracker.yaml` és az encoder naplója.
+A `detections.jsonl` az ID nélküli találatokat is tartalmazza; az `above_threshold` jelzi,
+hogy a találat eléri-e a felhasználó confidence-küszöbét. A követő gyengébb egyezést is
+megtarthat meglévő ID-val. Az `observations.jsonl` továbbra is csak követett pozíciókat ad át
+a SUMO-nak és a vonalátlépés-számlálónak. Az ID-val rendelkező doboz a követő simított pozíciója;
+a nyers YOLO-koordináták bekapcsolt diagnosztikával kerülnek a `raw_detections` mezőbe.
+A jelölt MP4 H.264, hang nélkül; a böngészős lejátszáshoz FFmpeg kell.
+Változó FPS bemenetnél a kimeneti, állandó FPS-es videó időalapja eltérhet az exportált időbélyegektől.
+
+Az ID nélküli felismerések világoskék dobozt kapnak, és nem növelik az egyedi ID-k számát.
+A `person` és a `bicycle` külön objektumkategória: összegük nem hitelesített közlekedőszám.
+A ByteTrack ugyanazt az Ultralytics-követőt használja, de a program a detektálást a követő
+szűrése előtt megőrzi. Részletek és ismételhető mérés: [felismerési audit](detection-audit.md).
 
 Az összes ID nem hitelesített egyedi jármű- vagy gyalogosszám. Takarás és kategóriatévesztés szétvághat vagy összekeverhet pályákat; a fél másodpercnél rövidebb találatok kimaradnak az összesítőből. A külön [forgalommérési ág](traffic-flow.md) irányított vonalátlépési eseményeket készít, és ezeket a [videó–SUMO kapcsolat](scene-to-sumo.md) felhasználhatja. A mért események száma és a követett ID-k száma eltérő fogalom.
 

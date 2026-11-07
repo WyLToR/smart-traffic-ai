@@ -112,7 +112,7 @@ class LightAnalyzer:
             for r in self.regions
         ]
         for obj in objects:
-            if obj.category != "traffic light":
+            if obj.category != "traffic light" or obj.track_id is None:
                 continue
             x = (obj.bbox[0] + obj.bbox[2]) / (2 * width)
             y = (obj.bbox[1] + obj.bbox[3]) / (2 * height)

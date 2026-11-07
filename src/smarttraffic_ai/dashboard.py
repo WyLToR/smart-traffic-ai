@@ -9,7 +9,7 @@ import streamlit as st
 
 from smarttraffic_ai.config import AppConfig, load_scenario, load_yaml, project_root
 from smarttraffic_ai.dashboard_video import render_video_tab
-from smarttraffic_ai.detection import CATEGORY_LABELS, DetectionConfig, DetectionResult, detect_file
+from smarttraffic_ai.detection import CATEGORY_LABELS, DetectionResult, detect_file
 from smarttraffic_ai.estimation import estimate_scenarios
 from smarttraffic_ai.optimization import optimize
 from smarttraffic_ai.simulation import binary, output_directory, run_simulation
@@ -160,12 +160,9 @@ def main():
     except FileNotFoundError as exc:
         available = False
         st.warning(str(exc))
-    detection_cfg = load_yaml(root / "config/detection.yaml", DetectionConfig)
-    has_yolo = (root / detection_cfg.model_path).is_file() and importlib.util.find_spec(
-        "ultralytics"
-    ) is not None
+    has_yolo = importlib.util.find_spec("ultralytics") is not None
     st.info(
-        "YOLO-modell és csomag elérhető."
+        "A YOLO-csomag elérhető. A feldolgozási profilhoz külön modell választható."
         if has_yolo
         else "YOLO-modell vagy csomag nincs telepítve. A SUMO ettől függetlenül használható."
     )
@@ -235,19 +232,30 @@ def main():
                 except Exception as exc:
                     st.error(f"Az összehasonlítás nem sikerült: {exc}")
     with image_tab:
+        from smarttraffic_ai.dashboard_detection import (
+            detection_settings,
+            show_counts,
+            show_diagnostics,
+            show_processing,
+        )
+
+        image_config = detection_settings(root, "image")
         uploaded = st.file_uploader("Helyi közlekedési kép", type=["jpg", "jpeg", "png"])
         mock = st.checkbox("Tesztadat használata YOLO helyett", value=False)
         if mock:
             st.warning("Mock mód: a megadott téglalapok tesztadatok, nem AI-felismerések.")
         if uploaded:
             st.image(uploaded, caption="Eredeti kép")
-            if st.button("Kép feldolgozása", disabled=not (mock or has_yolo)):
+            if st.button(
+                "Kép feldolgozása",
+                disabled=not (mock or (has_yolo and (root / image_config.model_path).is_file())),
+            ):
                 directory = output_directory(root, "upload")
                 path = directory / f"input{Path(uploaded.name).suffix.lower()}"
                 path.write_bytes(uploaded.getvalue())
                 try:
                     with st.spinner("Kép feldolgozása…"):
-                        result_path = detect_file(root, path, mock)
+                        result_path = detect_file(root, path, mock, config=image_config)
                     st.session_state["detection"] = str(result_path)
                 except Exception as exc:
                     st.error(f"A képfeldolgozás nem sikerült: {exc}")
@@ -273,7 +281,19 @@ def main():
                     for obj in result.objects
                 ]
             )
-            st.write(f"Összes felismert közlekedő: {len(result.objects)}")
+            st.write(f"Felismert közlekedési objektumok: {len(result.objects)}")
+            show_processing(result.config, result.runtime, result.processing_seconds)
+            show_counts(result.summary()["by_category"])
+            diagnostic_path = result_path.parent / "diagnostics.json"
+            if diagnostic_path.is_file():
+                diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+                show_diagnostics(diagnostic, result_path.parent / "raw.png")
+                st.download_button(
+                    "Diagnosztika (JSON)",
+                    diagnostic_path.read_bytes(),
+                    "diagnostics.json",
+                    mime="application/json",
+                )
             st.table(
                 [
                     {"Irány": d, "Megfigyelt gépjárművek": n}

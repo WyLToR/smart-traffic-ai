@@ -16,7 +16,12 @@ from urllib.request import Request, urlopen
 import yaml
 
 from smarttraffic_ai.config import load_yaml
-from smarttraffic_ai.detection import TRAFFIC_CATEGORIES, DetectionConfig, YoloDetector
+from smarttraffic_ai.detection import (
+    TRAFFIC_CATEGORIES,
+    DetectionConfig,
+    YoloDetector,
+    predict_frame,
+)
 from smarttraffic_ai.simulation import output_directory, save_json
 from smarttraffic_ai.traffic_lights import LightAnalyzer, annotate_lights
 from smarttraffic_ai.video import TrackCounter, TrackedObject, _annotate, _objects
@@ -128,26 +133,15 @@ def analyze_snapshot(detector, frame, regions, seconds):
     """Independent image observations: no cross-image IDs or inferred durations."""
     import cv2
 
-    result = detector.model.predict(
-        frame,
-        conf=detector.config.confidence,
-        imgsz=detector.config.image_size,
-        device=detector.config.device,
-        classes=detector.class_ids + detector.light_class_ids,
-        agnostic_nms=True,
-        verbose=False,
-    )[0]
-    objects = []
-    if result.boxes is not None:
-        for index, box in enumerate(result.boxes, start=1):
-            category = result.names[int(box.cls.item())]
-            if category in (*TRAFFIC_CATEGORIES, "traffic light"):
-                objects.append(
-                    TrackedObject(
-                        index, category, float(box.conf.item()), tuple(box.xyxy[0].tolist())
-                    )
-                )
+    _, selected = predict_frame(detector, frame, include_lights=True)
+    objects = [
+        TrackedObject(index, row["category"], row["confidence"], tuple(row["bbox"]))
+        for index, row in enumerate(selected, start=1)
+    ]
     counts = {name: sum(obj.category == name for obj in objects) for name in TRAFFIC_CATEGORIES}
+    detector.last_diagnostics.update(
+        displayed_count=sum(counts.values()), exported_count=sum(counts.values())
+    )
     image = frame.copy()
     for obj in objects:
         if obj.category not in TRAFFIC_CATEGORIES:
@@ -171,6 +165,11 @@ def analyze_snapshot(detector, frame, regions, seconds):
         "source_kind": "snapshot",
         "image": annotate_lights(image, readings),
         "counts": counts,
+        "config": detector.config.model_dump() if hasattr(detector.config, "model_dump") else None,
+        "runtime": detector.runtime_info() if hasattr(detector, "runtime_info") else {},
+        "diagnostics": detector.last_diagnostics
+        if getattr(detector.config, "diagnostics", False)
+        else None,
         "lights": readings,
         "objects": [
             {"category": obj.category, "confidence": obj.confidence, "bbox": obj.bbox}
@@ -365,7 +364,7 @@ class _LatestFrame:
 
 
 class LiveSession:
-    def __init__(self, root: Path, source: str, regions=(), max_seconds=120, fps=5):
+    def __init__(self, root: Path, source: str, regions=(), max_seconds=120, fps=5, config=None):
         self.root = root
         self.source = validate_source(source)
         if not 1 <= max_seconds <= 600 or not 1 <= fps <= 10:
@@ -373,6 +372,7 @@ class LiveSession:
         self.regions = list(regions)
         self.max_seconds = max_seconds
         self.fps = fps
+        self.config = config
         self.stop_event = threading.Event()
         self.lock = threading.Lock()
         self.heartbeat = time.monotonic()
@@ -401,6 +401,7 @@ class LiveSession:
     def _run(self):
         reader = None
         observations = None
+        detections = None
         directory = None
         origin = None
         analysis_started = time.monotonic()
@@ -408,7 +409,7 @@ class LiveSession:
             source = resolve_source(self.source)
             if self.stop_event.is_set():
                 return
-            config = load_yaml(self.root / "config/detection.yaml", DetectionConfig)
+            config = self.config or load_yaml(self.root / "config/detection.yaml", DetectionConfig)
             detector = YoloDetector(self.root, config)
             started = time.monotonic()
             reader = _LatestFrame(source, self.stop_event)
@@ -466,6 +467,7 @@ class LiveSession:
                         observations = (directory / "observations.jsonl").open(
                             "w", encoding="utf-8"
                         )
+                        detections = (directory / "detections.jsonl").open("w", encoding="utf-8")
                     seconds = stamp - origin
                     objects = _objects(detector, frame, tracker, low)
                     counter.update(seconds, duration, objects)
@@ -491,8 +493,39 @@ class LiveSession:
                                     }
                                     for obj in objects
                                     if obj.category in TRAFFIC_CATEGORIES
+                                    and obj.track_id is not None
                                 ],
                             }
+                        )
+                        + "\n"
+                    )
+                    current = [obj for obj in objects if obj.category in TRAFFIC_CATEGORIES]
+                    diagnostic = getattr(detector, "last_diagnostics", {})
+                    detections.write(
+                        json.dumps(
+                            {
+                                "seconds": seconds,
+                                "frame_index": frames,
+                                "objects": [
+                                    {
+                                        "track_id": obj.track_id,
+                                        "category": obj.category,
+                                        "confidence": obj.confidence,
+                                        "above_threshold": obj.above_threshold,
+                                        "bbox": list(obj.bbox),
+                                    }
+                                    for obj in current
+                                ],
+                                **(
+                                    {
+                                        "diagnostics": diagnostic,
+                                        "raw_detections": getattr(detector, "last_raw", []),
+                                    }
+                                    if config.diagnostics
+                                    else {}
+                                ),
+                            },
+                            allow_nan=False,
                         )
                         + "\n"
                     )
@@ -507,6 +540,17 @@ class LiveSession:
                         "tracks": counter.rows(),
                         "lights": readings,
                         "traffic_lights": lights.summary(),
+                        "detections_by_category": {
+                            name: sum(
+                                obj.category == name and obj.above_threshold for obj in current
+                            )
+                            for name in TRAFFIC_CATEGORIES
+                        },
+                        "diagnostics": diagnostic if config.diagnostics else None,
+                        "config": getattr(detector, "config", config).model_dump(),
+                        "runtime": detector.runtime_info()
+                        if hasattr(detector, "runtime_info")
+                        else {},
                     }
                     # Positions go to disk; only the latest preview remains in memory.
                     lights.rows.clear()
@@ -523,6 +567,8 @@ class LiveSession:
             self.stop_event.set()
             if observations is not None:
                 observations.close()
+            if detections is not None:
+                detections.close()
             if directory is not None and self.event is not None:
                 try:
                     import cv2
@@ -545,7 +591,7 @@ class LiveSession:
                         fps=self.fps,
                         width=width,
                         height=height,
-                        config=config.model_dump(),
+                        config=getattr(detector, "config", config).model_dump(),
                         directory=str(directory),
                         error=self.error,
                     )

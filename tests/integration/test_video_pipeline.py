@@ -22,6 +22,8 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture
 def sample_video(monkeypatch):
     root = project_root()
+    (root / "models").mkdir()
+    (root / "models/yolo26n.pt").touch()
     path = root / "outputs/video-validation/videos/sample.mp4"
     path.parent.mkdir(parents=True)
     writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 10, (64, 64))
@@ -152,7 +154,7 @@ def test_dashboard_can_process_a_video_sample(sample_video):
     assert not app.exception
     app.radio[0].set_value("Mintavideó").run()
     assert not app.exception
-    app.button[0].click().run(timeout=20)
+    next(b for b in app.button if b.label == "Videó feldolgozása").click().run(timeout=20)
     assert not app.exception
     assert app.session_state["video_result"]["frames"] == 8
     assert app.session_state["video_result"]["summary"]["total_unique"] == 1
@@ -177,3 +179,62 @@ def test_failed_inference_closes_encoder(sample_video, monkeypatch):
         process_video(project_root(), sample_video)
     assert len(encoders) == 1 and encoders[0].poll() is not None
     assert not list((project_root() / "outputs").glob("video-*/analysis.json"))
+
+
+def test_untracked_person_is_visible_and_exported_but_not_a_sumo_vehicle(sample_video, monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.setattr(
+        video,
+        "_objects",
+        lambda *_: [
+            TrackedObject(None, "person", 0.8, (5, 5, 30, 30)),
+            TrackedObject(1, "car", 0.9, (32, 32, 60, 60)),
+        ],
+    )
+    result = process_video(project_root(), sample_video)
+    assert result["last_detections_by_category"]["person"] == 1
+    assert result["summary"]["by_category"]["person"] == 0
+    directory = Path(result["directory"])
+    detected = json.loads((directory / "detections.jsonl").read_text().splitlines()[0])
+    tracked = json.loads((directory / "observations.jsonl").read_text().splitlines()[0])
+    assert {obj["category"] for obj in detected["objects"]} == {"car", "person"}
+    assert detected["objects"][0]["track_id"] is None
+    assert [obj["category"] for obj in tracked["objects"]] == ["car"]
+    from smarttraffic_ai.scene import SceneSettings, analyze_video
+
+    scene = analyze_video(directory / "analysis.json", SceneSettings(track_directions={1: "N"}))
+    assert sum(a.initial_vehicles["car"] for a in scene.approaches) == 1
+
+
+@pytest.mark.parametrize("content", [b"", b"not an mp4"])
+def test_corrupt_video_does_not_produce_an_analysis(tmp_path, content):
+    path = tmp_path / "broken.mp4"
+    path.write_bytes(content)
+    with pytest.raises(ValueError, match="videó"):
+        process_video(project_root(), path)
+
+
+@pytest.mark.parametrize("profile_id", ["fast", "balanced", "detailed"])
+def test_video_exports_selected_profile_without_skipping_frames(
+    sample_video, monkeypatch, profile_id
+):
+    from types import SimpleNamespace
+
+    from smarttraffic_ai.detection import DetectionConfig
+    from smarttraffic_ai.profiles import DETECTION_PROFILES
+
+    calls = []
+
+    def detector(root, config):
+        calls.append(config)
+        return SimpleNamespace(config=config)
+
+    monkeypatch.setattr(video, "YoloDetector", detector)
+    config = DETECTION_PROFILES[profile_id].apply(DetectionConfig())
+    result = process_video(project_root(), sample_video, config=config)
+    assert len(calls) == 1
+    assert result["config"]["profile_id"] == profile_id
+    assert result["config"]["model_path"] == config.model_path
+    assert result["frames"] == 8 and result["duration_seconds"] == pytest.approx(0.8)
+    assert result["summary"]["total_unique"] == 1 and result["processing_fps"] > 0

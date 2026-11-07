@@ -1,5 +1,7 @@
 model_path: models/yolo26n.pt
-confidence: 0.25
+profile_id: balanced
+confidence: 0.20
+max_detections: 500
 image_size: 960
 device: cpu
 classes: [car, bus, truck, motorcycle, bicycle, person]

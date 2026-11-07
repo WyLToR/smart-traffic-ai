@@ -23,7 +23,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["sumo: valódi SUMO-integráció"]
+markers = ["sumo: valódi SUMO-integráció", "vision: külön bekapcsolható helyi YOLO-inferencia"]
 
 [tool.ruff]
 line-length = 100
