@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from smarttraffic_ai.config import SignalConfig, load_scenario, project_root
+from smarttraffic_ai.config import Scenario, SignalConfig, load_scenario, project_root
 from smarttraffic_ai.simulation import binary, build_network, run_simulation
 
 try:
@@ -51,3 +51,23 @@ def test_real_sumo_end_to_end(mode):
     replay = run_simulation(root, scenario, mode, SignalConfig())
     assert replay["metrics"] == metrics
     assert replay["demand_sha256"] == result["demand_sha256"]
+
+
+@pytest.mark.parametrize("mode", ["fixed", "adaptive"])
+@pytest.mark.parametrize("rate", [0, 9000])
+def test_empty_and_saturated_network(mode, rate):
+    root = project_root()
+    data = load_scenario(root, "balanced").model_dump()
+    data["duration"] = 120
+    data["windows"][0].update(end=120, rates={"N": rate, "S": 0, "E": 0, "W": 0})
+    result = run_simulation(root, Scenario.model_validate(data), mode)
+    metrics = result["metrics"]
+    assert metrics["collision_vehicle_events"] == 0
+    assert metrics["demand"] == metrics["arrived"] + metrics["remaining"]
+    if rate == 0:
+        assert metrics["mean_wait"] == metrics["max_queue"] == metrics["demand"] == 0
+        assert metrics["mean_travel_completed"] is None
+    else:
+        assert metrics["pending"] > 100
+        assert metrics["total_insertion_delay"] > 0
+        assert metrics["remaining"] > metrics["arrived"]

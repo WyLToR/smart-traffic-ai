@@ -2,7 +2,40 @@ import pytest
 from pydantic import ValidationError
 
 from smarttraffic_ai.config import SignalConfig
-from smarttraffic_ai.controllers import Controller, signal_states
+from smarttraffic_ai.controllers import ApproachController, Controller, signal_states
+
+
+@pytest.mark.parametrize("approaches", [["N", "E", "S", "W"], ["N", "E", "W"]])
+@pytest.mark.parametrize("mode", ["fixed", "adaptive"])
+def test_protected_approach_service_has_safe_transitions_and_bounded_green(approaches, mode):
+    cfg = SignalConfig(min_green=8, max_green=30, ns_green=13, ew_green=19)
+    controller = ApproachController(cfg, approaches, mode)
+    links = [[(f"in_{side}_0", "out_dummy_0", "")] for side in approaches]
+    completed = []
+    phase = controller.phase
+    duration = 0
+    for _ in range(800):
+        state = controller.state(links)
+        assert sum(char in "Gy" for char in state) <= 1
+        if controller.phase == "ALL_RED":
+            assert set(state) == {"r"}
+        duration += 1
+        controller.step_queues(dict.fromkeys(approaches, 50))
+        if controller.phase != phase:
+            if phase.endswith("GREEN"):
+                assert cfg.min_green <= duration <= cfg.max_green
+                if mode == "fixed":
+                    expected = cfg.ns_green if phase[0] in "NS" else cfg.ew_green
+                    assert duration == expected
+            elif phase.endswith("YELLOW"):
+                assert duration == cfg.yellow
+            else:
+                assert duration == cfg.all_red
+            completed.append(phase)
+            phase, duration = controller.phase, 0
+    services = [p.split("_")[0] for p in completed if p.endswith("GREEN")]
+    assert services[: len(approaches) * 2] == approaches * 2
+
 
 EXPECTED_TRANSITIONS = {
     "NS_GREEN": "NS_YELLOW",

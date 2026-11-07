@@ -1,6 +1,6 @@
-model_path: models/yolo11n.pt
-confidence: 0.35
-image_size: 640
+model_path: models/yolo26n.pt
+confidence: 0.25
+image_size: 960
 device: cpu
 classes: [car, bus, truck, motorcycle, bicycle, person]
 # Normalizált téglalapok: x1, y1, x2, y2. Példanézet, kameránként kalibrálandó!

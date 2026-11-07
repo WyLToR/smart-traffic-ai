@@ -40,7 +40,8 @@ def render_live_tab(root, has_yolo):
         "Csak a hat közlekedési kategória és a jelzőlámpák kerülnek elemzésre. "
         "A gyalogos/jármű lámpatípust a fenti panelen adhatod meg. "
         "A számlálás legalább 3 észlelést és 0,5 s becsült láthatóságot vár meg. "
-        "Az idők az elemzés indulásától értendők; a látható idő mintavételi becslés, "
+        "Videónál az idők az első elemzett képkockától értendők; "
+        "a látható idő mintavételi becslés, "
         "a hálózati kimaradás nem számít bele. Új indításkor új számlálás kezdődik."
     )
     st.caption(
@@ -120,12 +121,27 @@ def render_live_tab(root, has_yolo):
         if not snapshot:
             st.dataframe(track_rows(event["tracks"]), hide_index=True, width="stretch")
         if not session.running:
+            saved = getattr(session, "result", None)
+            if saved is not None:
+                previous = st.session_state.get("live_result", {})
+                if previous.get("directory") != saved["directory"]:
+                    st.session_state["live_result"] = saved
+                    st.rerun()
+                st.success(
+                    "Az élő vizsgálat mentve. A Kép/videó → SUMO lapon "
+                    "a Legutóbbi élő vizsgálat bemenetet válaszd."
+                )
+            elif not snapshot:
+                st.warning(
+                    "Ehhez a korábbi vizsgálathoz nincs mentett pozícióexport. "
+                    "Az összesítés letölthető, de a SUMO-átadáshoz indíts új élő elemzést."
+                )
             result = {key: value for key, value in event.items() if key != "image"}
             result.pop("received_at", None)
             result["time_basis"] = (
                 "independent snapshots; no tracking or visibility duration"
                 if snapshot
-                else "session-monotonic; sampled visibility estimate"
+                else "monotonic since first analyzed frame; sampled visibility estimate"
             )
             st.download_button(
                 "Élő elemzés eredménye (JSON)",

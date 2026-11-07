@@ -64,7 +64,39 @@ uv run --no-sync python -m smarttraffic_ai analyze-video --input sajat-video.mp4
 
 A videóelemzéshez a `vision` extra és a PATH-ból elérhető FFmpeg szükséges. Beállítások és idődefiníciók: [ai-model.md](docs/ai-model.md).
 
-## Képfeldolgozás
+## Kép/videó → SUMO
+
+Videóból mért belépésekhez előbb a **Forgalommérés** lapot használd: menthető kamerazónák és irányított számlálóvonalak, időbélyegzett események, 10/30/60 másodperces számlálás, jelölt videó és kézi referenciaértékelés érhető el. A mért események saját időbélyegükkel kapcsolhatók a SUMO-ba; a kezdetben jelen lévő járművek nem duplázódnak meg. A stopvonali/helyi áthaladás külön szerepű, nem automatikusan új beérkezés. A teljes folyamat és a demonstráció korlátai: [Videós forgalommérés](docs/traffic-flow.md).
+
+A **Kép/videó → SUMO** lapon a már lefuttatott felismerésből saját forgalmi helyzet generálható:
+
+1. A Képfeldolgozás vagy Videóelemzés lapon dolgozd fel a bemenetet.
+2. Válaszd ki a felismerést, majd rendeld a találatokat N/E/S/W bevezető ágakhoz. Kézi hozzárendelés és normalizált téglalapzónák használhatók. A kép széle nem határozza meg a forgalmi irányt; a parkoló találatokat hagyd ki.
+3. Válassz négyágú vagy T-csomópontot, sávszámot, ághosszt, sebességet és kanyarodási arányokat. Ezek sablonparaméterek, nem a képből mért geometria.
+4. Ellenőrizd a kezdeti terhelést és a külön megadott későbbi érkezéseket, majd kattints a **SUMO-forgatókönyv létrehozása** gombra.
+5. Indítsd el a generált forgalmat, szükség esetén SUMO-GUI-val, vagy hasonlítsd össze a fix és adaptív vezérlést azonos járműigénnyel. A teljes fájlcsomag ZIP-ben is letölthető.
+
+A pillanatnyi gépjárműszám kezdeti terhelést ad; nem változik észrevétlenül új érkezéssé. A gépjárművek típusa megmarad (személyautó, busz, teherautó, motorkerékpár). A gyalogosok és kerékpárok megfigyelése szerepel az adatokban, de a mostani SUMO-sablonban nem szimuláltak. Az ismeretlen irányú találatok kimaradnak a járműigényből.
+
+Videónál a megerősített tracking-ID-k pozíciói és a képkockák tényleges időközei alapján időablakos foglaltság készül. A későbbi intenzitás kézzel adható meg, vagy a megfigyelt foglaltság súlyozhat egy megadott alapintenzitást. Ez továbbra is feltételezés, nem számlálóvonalon mért érkezés. Korábbi, `observations.jsonl` nélküli videóeredménynél újra kell futtatni a videóelemzést.
+
+Ez a két becslési mód megmaradt. A harmadik lehetőség a **Követett vonalátlépések időbélyegei**: az elkészült forgalommérésből pontosan az elfogadott új entry események kerülnek a generátorba, Poisson-újragenerálás nélkül. A pontosság igazolásához ember által ellenőrzött referencia kell; enélkül külön jelölt kísérleti futtatás választható. A meglévő busy_intersection minta demonstráció, nem igazolt beérkezési referencia.
+
+Parancssorból ugyanaz a folyamat:
+
+```bash
+# Előbb ellenőrizd és igazítsd a képhez a scene-example.yaml példazónáit!
+uv run --no-sync python -m smarttraffic_ai reconstruct --input sajat-kep.jpg --settings config/scene-example.yaml --run
+uv run --no-sync python -m smarttraffic_ai reconstruct --input sajat-video.mp4 --settings config/scene-example.yaml --compare
+
+# A kiírt scene-* könyvtár útvonalát add meg:
+uv run --no-sync python -m smarttraffic_ai scene-run --scene outputs/scene-AZONOSITO --gui
+uv run --no-sync python -m smarttraffic_ai scene-compare --scene outputs/scene-AZONOSITO
+```
+
+A `--input` meglévő `detection.json` vagy `analysis.json` is lehet. A generált könyvtár saját hálózatot, járműigényt és `simulation.sumocfg` állományt tartalmaz. A hálózatot `netconvert` készíti; a kész `.net.xml` fájlt a generátor nem írja át. A mérések az indított `run-*` könyvtárban találhatók. Módszer, mezők, fázisok és korlátok: [Képi adatokból SUMO](docs/scene-to-sumo.md).
+
+## Állóképi felismerés és korábbi becslés
 
 ```bash
 uv run --no-sync python -m smarttraffic_ai detect --input sajat-kep.jpg
@@ -100,4 +132,4 @@ A kód a `src/smarttraffic_ai/`, a konfiguráció a `config/`, a mintaforgatók�
 - [SUMO-hálózat és vezérlés](docs/sumo.md)
 - [Korlátok és következő feladatok](docs/limitations.md)
 
-Nincs vonalátlépés-alapú forgalomszámlálás, valós kereszteződésre kalibrált modell vagy kameraképeken mért felismerési pontosság. Külső képek és modellek eredetét, illetve felhasználási feltételeit külön kell rögzíteni.
+Van konfigurálható vonalátlépés-számlálás és referenciaértékelés. Valós kereszteződésre kalibrált geometria és ember által igazolt kamerás pontosság még nincs. Külső képek és modellek eredetét, illetve felhasználási feltételeit külön kell rögzíteni.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import math
 import os
 import shutil
@@ -264,7 +265,10 @@ def process_video(
         fallback_timestamps = 0
         seconds = max(0.0, capture.get(cv2.CAP_PROP_POS_MSEC) / 1000)
         index = 0
-        with (directory / "encoder.log").open("w", encoding="utf-8") as log:
+        with (
+            (directory / "encoder.log").open("w", encoding="utf-8") as log,
+            (directory / "observations.jsonl").open("w", encoding="utf-8") as observations,
+        ):
             encoder = subprocess.Popen(
                 [
                     ffmpeg,
@@ -311,6 +315,31 @@ def process_video(
                 duration = next_seconds - seconds
                 objects = _objects(detector, frame, tracker_path, low_threshold)
                 counter.update(seconds, duration, objects)
+                observations.write(
+                    json.dumps(
+                        {
+                            "seconds": seconds,
+                            "frame_index": index,
+                            "duration": duration,
+                            "objects": [
+                                {
+                                    "track_id": obj.track_id,
+                                    "category": obj.category,
+                                    "bbox": [
+                                        obj.bbox[0] / width,
+                                        obj.bbox[1] / height,
+                                        obj.bbox[2] / width,
+                                        obj.bbox[3] / height,
+                                    ],
+                                }
+                                for obj in objects
+                                if obj.category in TRAFFIC_CATEGORIES
+                            ],
+                        },
+                        allow_nan=False,
+                    )
+                    + "\n"
+                )
                 image = _annotate(frame, objects, counter)
                 light_readings = lights.update(frame, objects, seconds, duration)
                 annotate_lights(image, light_readings)
@@ -354,6 +383,7 @@ def process_video(
         final_path = partial.replace(directory / "annotated.mp4")
         result = {
             "input_name": path.name,
+            "input_path": str(path.resolve()),
             "input_sha256": input_sha,
             "fps": fps,
             "width": width,

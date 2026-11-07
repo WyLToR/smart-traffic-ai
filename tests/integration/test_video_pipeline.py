@@ -76,6 +76,69 @@ def test_video_export_and_progress(sample_video):
     assert json.loads((directory / "analysis.json").read_text(encoding="utf-8"))["frames"] == 8
     assert "handbag" not in (directory / "tracks.csv").read_text(encoding="utf-8-sig")
     assert (directory / "traffic-lights.csv").is_file()
+    assert (directory / "observations.jsonl").is_file()
+    observations = [
+        json.loads(line) for line in (directory / "observations.jsonl").read_text().splitlines()
+    ]
+    assert len(observations) == 8
+    assert observations[0]["seconds"] == 0
+    assert all(obj["category"] == "car" for frame in observations for obj in frame["objects"])
+
+
+def test_video_positions_feed_the_generated_sumo_scenario(sample_video):
+    from pathlib import Path
+
+    from smarttraffic_ai.scene import SceneSettings, analyze_video
+    from smarttraffic_ai.scene_sumo import generate_scene, run_scene
+    from smarttraffic_ai.simulation import binary
+
+    try:
+        binary("sumo")
+        binary("netconvert")
+    except FileNotFoundError:
+        pytest.skip("SUMO szükséges")
+    result = process_video(project_root(), sample_video)
+    scene = analyze_video(
+        Path(result["directory"]) / "analysis.json", SceneSettings(track_directions={1: "N"})
+    )
+    directory = generate_scene(project_root(), scene)
+    metrics = run_scene(project_root(), directory)["metrics"]
+    assert metrics["demand"] == metrics["demand_car"] == 1
+    assert metrics["demand_N"] == 1
+    assert metrics["arrived"] == 1
+
+
+def test_flow_overlay_is_a_playable_video_without_repeating_yolo(sample_video):
+    from pathlib import Path
+
+    from smarttraffic_ai.detection import Region
+    from smarttraffic_ai.flow import CameraProfile, CountingLine, measure_flow
+    from smarttraffic_ai.flow_video import render_flow_video
+
+    result = process_video(project_root(), sample_video)
+    analysis = Path(result["directory"]) / "analysis.json"
+    camera = CameraProfile(
+        camera_id="overlay-test",
+        fixed_view_confirmed=True,
+        reference_size=(64, 64),
+        zones=[Region(id="north", direction="N", bounds=(0, 0, 1, 1))],
+        lines=[
+            CountingLine(
+                id="entry", zone_id="north", approach="N", start=(0.5, 0.1), end=(0.5, 0.9)
+            )
+        ],
+    )
+    measurement = measure_flow(project_root(), analysis, camera)
+    output = render_flow_video(analysis, measurement)
+    assert (measurement.parent / "events.csv").is_file()
+    capture = cv2.VideoCapture(str(output))
+    try:
+        assert capture.isOpened()
+        assert int(capture.get(cv2.CAP_PROP_FRAME_COUNT)) == 8
+        ok, _ = capture.read()
+        assert ok
+    finally:
+        capture.release()
 
 
 def test_dashboard_can_process_a_video_sample(sample_video):

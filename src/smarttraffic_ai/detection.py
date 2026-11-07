@@ -39,9 +39,9 @@ class Region(Model):
 
 
 class DetectionConfig(Model):
-    model_path: str = "models/yolo11n.pt"
-    confidence: float = Field(default=0.35, ge=0, le=1)
-    image_size: int = Field(default=640, ge=32, le=4096)
+    model_path: str = "models/yolo26n.pt"
+    confidence: float = Field(default=0.25, ge=0, le=1)
+    image_size: int = Field(default=960, ge=32, le=4096)
     device: str = "cpu"
     classes: list[Category] = Field(default_factory=lambda: list(TRAFFIC_CATEGORIES), min_length=1)
     regions: list[Region] = Field(default_factory=list)

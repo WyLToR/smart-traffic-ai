@@ -30,10 +30,28 @@ METRIC_LABELS = {
     "total_stopped_seconds": "Összes állásidő (jármű·s)",
     "total_insertion_delay": "Összes bejutási késés (jármű·s)",
     "collision_vehicle_events": "Ütközésben érintett járműesemények",
+    "moving_vehicle_steps": "Mozgó járművek összes mintavételi lépése",
+    "red_stopped_vehicle_steps": "Piros jelzésnél álló járművek mintavételi lépései",
+    "warmup_departed": "Beállási idő alatt hálózatba lépett járművek",
+    "measured_arrivals": "Mért eseményből ütemezett új járművek",
+    "measured_inserted": "Mért eseményből ténylegesen bejutott járművek",
+    "measured_pending": "Mért eseményből bejutásra váró járművek",
+    "measured_arrived": "Mért eseményből célba ért járművek",
 }
+for _side, _label in {"N": "Észak", "E": "Kelet", "S": "Dél", "W": "Nyugat"}.items():
+    for _prefix, _meaning in {
+        "demand": "Tervezett",
+        "departed": "Hálózatba lépett",
+        "arrived": "Célba ért",
+    }.items():
+        METRIC_LABELS[f"{_prefix}_{_side}"] = f"{_meaning} – {_label} (jármű)"
+for _category, _label in CATEGORY_LABELS.items():
+    METRIC_LABELS[f"demand_{_category}"] = f"Tervezett – {_label}"
 SOURCE_LABELS = {
     "synthetic": "Szintetikus",
     "image-estimate": "Képből származó, feltételezett",
+    "video-estimate": "Videóból származó, becsült",
+    "video-measured": "Követett vonalátlépésekből (a pontosságot a referenciariport jelzi)",
     "mock-estimate": "Mock adaton alapuló, feltételezett",
 }
 
@@ -45,7 +63,9 @@ def show_run(result, prefix="current-run"):
     columns[0].metric("Átlagos várakozás", f"{metrics['mean_wait']:.2f} s")
     columns[1].metric("Célba ért járművek", metrics["arrived"])
     columns[2].metric("Befejezetlen utak", metrics["remaining"])
-    st.table([{"Mutató": METRIC_LABELS[key], "Érték": value} for key, value in metrics.items()])
+    st.table(
+        [{"Mutató": METRIC_LABELS.get(key, key), "Érték": value} for key, value in metrics.items()]
+    )
     directory = Path(result["directory"])
     timeline = directory / "timeline.csv"
     if timeline.is_file():
@@ -164,8 +184,15 @@ def main():
             )
         except (OSError, ValueError, KeyError):
             st.caption("Az utolsó eredmény nem olvasható.")
-    scenario_tab, image_tab, video_tab, result_tab = st.tabs(
-        ["Forgatókönyvek és futtatás", "Képfeldolgozás", "Videóelemzés", "Eredmények"]
+    scenario_tab, image_tab, video_tab, flow_tab, scene_tab, result_tab = st.tabs(
+        [
+            "Forgatókönyvek és futtatás",
+            "Képfeldolgozás",
+            "Videóelemzés",
+            "Forgalommérés",
+            "Kép/videó → SUMO",
+            "Eredmények",
+        ]
     )
     with scenario_tab:
         paths = sorted((root / "data/scenarios").glob("*.yaml"))
@@ -277,6 +304,14 @@ def main():
             )
     with video_tab:
         render_video_tab(root, has_yolo)
+    with flow_tab:
+        from smarttraffic_ai.dashboard_flow import render_flow_tab
+
+        render_flow_tab(root)
+    with scene_tab:
+        from smarttraffic_ai.dashboard_scene import render_scene_tab
+
+        render_scene_tab(root, available)
     with result_tab:
         directory = root / app.output_dir
         files = sorted(

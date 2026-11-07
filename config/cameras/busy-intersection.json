@@ -1,0 +1,15 @@
+{
+  "camera_id": "busy-intersection-demo",
+  "fixed_view_confirmed": true,
+  "reference_size": [1280, 720],
+  "zones": [
+    {"id": "left-road", "direction": "N", "bounds": [0, 0.5, 0.5, 0.7]},
+    {"id": "right-road", "direction": "E", "bounds": [0.5, 0.5, 1, 0.7]}
+  ],
+  "lines": [
+    {"id": "left-crossing", "zone_id": "left-road", "approach": "N", "start": [0.25, 0.53], "end": [0.25, 0.69], "inbound": "positive_to_negative", "role": "discharge"},
+    {"id": "right-crossing", "zone_id": "right-road", "approach": "E", "start": [0.8, 0.53], "end": [0.8, 0.69], "inbound": "negative_to_positive", "role": "discharge"}
+  ],
+  "window_seconds": 10,
+  "notes": "A helyi busy_intersection.mp4 demonstrációs profilja. A háttérút helyi áthaladásait méri, nem igazolt upstream beérkezést. N/E sablon-hozzárendelés, nem felismert égtáj. A gyalogosok takarása korlátozza a járműkövetést. Ember által jóváhagyott pontosság még nincs."
+}

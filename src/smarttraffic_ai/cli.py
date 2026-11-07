@@ -41,6 +41,35 @@ def main(argv=None) -> int:
     command.add_argument(
         "--prior-rate", type=float, default=450, help="Feltételezett jármű/óra/irány"
     )
+    command = sub.add_parser("reconstruct", help="Kép/videó felismeréséből saját SUMO-forgatókönyv")
+    command.add_argument("--input", required=True, help="JPG/PNG/MP4 vagy felismerési JSON")
+    command.add_argument("--settings", required=True, help="Ellenőrzött SceneSettings YAML/JSON")
+    command.add_argument("--run", action="store_true", help="Generálás után TraCI-futtatás")
+    command.add_argument("--gui", action="store_true")
+    command.add_argument(
+        "--compare", action="store_true", help="Azonos igény fix és adaptív vezérléssel"
+    )
+    command.add_argument("--controller", choices=["fixed", "adaptive"], default="fixed")
+    for name in ("scene-run", "scene-compare"):
+        command = sub.add_parser(name, help="Generált forgalmi helyzet futtatása/összehasonlítása")
+        command.add_argument("--scene", required=True, help="A generált scene-* könyvtár")
+        if name == "scene-run":
+            command.add_argument("--controller", choices=["fixed", "adaptive"], default="fixed")
+            command.add_argument("--gui", action="store_true")
+    command = sub.add_parser(
+        "measure-flow", help="Követési pozíciókból irányított vonalátlépések mérése"
+    )
+    command.add_argument("--input", required=True, help="MP4 vagy a meglévő analysis.json")
+    command.add_argument("--camera", required=True, help="Mentett CameraProfile JSON")
+    command.add_argument("--annotate", action="store_true", help="Jelölt számlálási videó mentése")
+    command = sub.add_parser(
+        "evaluate-flow", help="Forgalommérés összevetése kézi referenciaeseményekkel"
+    )
+    command.add_argument("--measurement", required=True)
+    command.add_argument("--reference", required=True)
+    command.add_argument(
+        "--tolerance", type=float, default=1.0, help="Egyeztetési időtolerancia (s)"
+    )
     sub.add_parser("dashboard", help="Magyar Streamlit-felület indítása")
     args = parser.parse_args(argv)
     try:
@@ -98,6 +127,82 @@ def main(argv=None) -> int:
                 save_json(directory / f"{scenario.id}.json", scenario.model_dump())
                 # JSON is also valid YAML and accepted by the scenario loader.
             print(f"Becslések és alternatív forgatókönyvek: {directory}")
+        elif args.command in {"measure-flow", "evaluate-flow"}:
+            from pathlib import Path
+
+            from smarttraffic_ai.flow import CameraProfile, FlowMeasurement, measure_flow
+            from smarttraffic_ai.simulation import save_json
+
+            if args.command == "measure-flow":
+                path = Path(args.input)
+                if path.suffix.lower() == ".mp4":
+                    from smarttraffic_ai.video import process_video
+
+                    path = Path(process_video(root, path)["directory"]) / "analysis.json"
+                camera = CameraProfile.model_validate_json(
+                    Path(args.camera).read_text(encoding="utf-8")
+                )
+                measurement = measure_flow(root, path, camera)
+                if args.annotate:
+                    from smarttraffic_ai.flow_video import render_flow_video
+
+                    render_flow_video(path, measurement)
+                print(f"Forgalommérés és exportok: {measurement}")
+            else:
+                from smarttraffic_ai.flow_validation import ManualReference, evaluate_flow
+
+                measurement = FlowMeasurement.model_validate_json(
+                    Path(args.measurement).read_text(encoding="utf-8")
+                )
+                reference = ManualReference.model_validate_json(
+                    Path(args.reference).read_text(encoding="utf-8")
+                )
+                report = evaluate_flow(measurement, reference, args.tolerance)
+                path = Path(args.measurement).parent / "validation.json"
+                save_json(path, report.model_dump(mode="json"))
+                print(report.model_dump_json(indent=2))
+                print(f"Referenciaértékelés: {path}")
+        elif args.command in {"reconstruct", "scene-run", "scene-compare"}:
+            from pathlib import Path
+
+            from smarttraffic_ai.scene_sumo import compare_scene, run_scene
+
+            if args.command == "reconstruct":
+                from smarttraffic_ai.config import load_yaml
+                from smarttraffic_ai.detection import DetectionResult, detect_file
+                from smarttraffic_ai.scene import SceneSettings, analyze_image, analyze_video
+                from smarttraffic_ai.scene_sumo import generate_scene
+
+                if args.gui and not args.run:
+                    raise ValueError("A --gui kapcsolóhoz a --run kapcsolót is add meg.")
+                path = Path(args.input)
+                if path.suffix.lower() in {".jpg", ".jpeg", ".png"}:
+                    path = detect_file(root, path)
+                elif path.suffix.lower() == ".mp4":
+                    from smarttraffic_ai.video import process_video
+
+                    path = Path(process_video(root, path)["directory"]) / "analysis.json"
+                data = json.loads(path.read_text(encoding="utf-8"))
+                settings = load_yaml(Path(args.settings), SceneSettings)
+                scene = (
+                    analyze_video(path, settings)
+                    if "tracks" in data
+                    else analyze_image(DetectionResult.model_validate(data), settings)
+                )
+                directory = generate_scene(root, scene)
+                print(f"Generált SUMO-forgatókönyv: {directory}")
+                if args.run:
+                    result = run_scene(root, directory, args.controller, args.gui)
+                    print(json.dumps(result["metrics"], ensure_ascii=False, indent=2))
+                    print(f"Mérés: {result['directory']}")
+                if args.compare:
+                    print(f"Összehasonlítás: {compare_scene(root, directory)['directory']}")
+            elif args.command == "scene-run":
+                result = run_scene(root, Path(args.scene), args.controller, args.gui)
+                print(json.dumps(result["metrics"], ensure_ascii=False, indent=2))
+                print(f"Mérés: {result['directory']}")
+            else:
+                print(f"Összehasonlítás: {compare_scene(root, Path(args.scene))['directory']}")
         else:
             path = root / "src/smarttraffic_ai/dashboard.py"
             return subprocess.call([sys.executable, "-m", "streamlit", "run", str(path)])

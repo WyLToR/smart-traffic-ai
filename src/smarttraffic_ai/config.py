@@ -32,7 +32,9 @@ class Scenario(Model):
     name: str
     duration: int = Field(ge=1, le=86400)
     seed: int = Field(default=42, ge=0, le=2147483647)
-    source: Literal["synthetic", "image-estimate", "mock-estimate"] = "synthetic"
+    source: Literal[
+        "synthetic", "image-estimate", "video-estimate", "video-measured", "mock-estimate"
+    ] = "synthetic"
     assumptions: list[str] = Field(min_length=1)
     windows: list[Window] = Field(min_length=1)
 

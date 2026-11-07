@@ -2,6 +2,8 @@
 
 A SUMO külön folyamatban futó mikroszkopikus forgalomszimulátor. A Python TraCI protokollon keresztül lépteti, lekérdezi és a szimulációs jelzőlámpát módosítja. Alapforrás: [TraCI dokumentáció](https://sumo.dlr.de/docs/TraCI/).
 
+Az alábbi alapmodell a korábbi szintetikus példáké. A képből/videóból generált négyágú és T-csomópont, kanyarodó forgalom és áganként védett jelzőlámpa-fázisok leírása: [Képi adatokból SUMO](scene-to-sumo.md).
+
 ## Hálózat
 
 A `build-network` létrehozza a `sumo/networks/intersection.nod.xml`, `.edg.xml`, `.con.xml` forrásokat és `netconvert` segítségével a `.net.xml` hálózatot. A középső `J` csomóponthoz 250 méterre északi, déli, keleti és nyugati végpont csatlakozik. Sebességhatár 13,89 m/s; irányonként egy be- és kivezető sáv van.

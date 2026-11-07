@@ -1,0 +1,21 @@
+# Példamegfeleltetés, nem kamerakalibráció! Futtatás előtt ellenőrizd a zónákat.
+# Itt a bal képfél az N, a jobb képfél az E sablonág: ez felhasználói feltételezés.
+intersection_type: four_way
+lanes: 1
+arm_length: 250
+speed_kmh: 50
+signalized: true
+simulation_seconds: 120
+warmup_seconds: 5
+seed: 42
+turns: {straight: 0.8, left: 0.1, right: 0.1}
+arrival_mode: configured
+# Az állóképen látott terhelés kezdeti járműveket ad. A későbbi érkezések itt kikapcsoltak.
+arrival_rates: {N: 0, E: 0, S: 0, W: 0}
+regions:
+  - id: view-a
+    direction: N
+    bounds: [0, 0, 0.5, 1]
+  - id: view-b
+    direction: E
+    bounds: [0.5, 0, 1, 1]

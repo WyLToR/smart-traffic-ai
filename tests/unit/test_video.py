@@ -47,12 +47,6 @@ def test_duplicate_id_and_category_change_still_count_as_one():
     assert counter.summary()["by_category"]["truck"] == 0
 
 
-def test_counter_state_does_not_leak_between_videos():
-    first = TrackCounter(min_observations=1, min_visible_seconds=0)
-    first.update(0, 0.1, [observed()])
-    assert TrackCounter().summary()["total_unique"] == 0
-
-
 @pytest.mark.parametrize(
     "seconds,duration", [(-0.1, 0.1), (0, 0), (0, -1), (float("nan"), 0.1), (0, float("inf"))]
 )

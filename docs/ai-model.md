@@ -48,7 +48,7 @@ Az időalap az OpenCV dekódolt időbélyege. Hiányzó vagy nem növekvő időb
 
 A kimenet `outputs/video-*` alatt: `annotated.mp4`, `analysis.json`, `tracks.csv`, `timeline.csv`, a tényleges `tracker.yaml` és az encoder naplója. A jelölt MP4 H.264, hang nélkül; a böngészős lejátszáshoz a rendszerre telepített FFmpeg kell (`ffmpeg -version`). A kimenet állandó FPS-re normalizált, ezért változó FPS bemenetnél a lejátszás időalapja eltérhet az exportált eredeti időbélyegektől.
 
-Az összes ID nem hitelesített egyedi jármű- vagy gyalogosszám. Takarás és kategóriatévesztés szétvághat vagy összekeverhet pályákat; a fél másodpercnél rövidebb találatok kimaradnak az összesítőből. Nincs még vonalátlépés-számlálás vagy videó–SUMO adatkapcsolat.
+Az összes ID nem hitelesített egyedi jármű- vagy gyalogosszám. Takarás és kategóriatévesztés szétvághat vagy összekeverhet pályákat; a fél másodpercnél rövidebb találatok kimaradnak az összesítőből. A külön [forgalommérési ág](traffic-flow.md) irányított vonalátlépési eseményeket készít, és ezeket a [videó–SUMO kapcsolat](scene-to-sumo.md) felhasználhatja. A mért események száma és a követett ID-k száma eltérő fogalom.
 
 ## Jelzőlámpák
 

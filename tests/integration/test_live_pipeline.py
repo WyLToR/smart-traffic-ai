@@ -1,6 +1,8 @@
 import io
+import json
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -168,6 +170,98 @@ def test_live_failure_stops_reader(fake_live_source, monkeypatch):
     assert not session.running
     assert session.error == "inference failed"
     assert session.stop_event.is_set()
+    assert session.result is None
+
+
+@pytest.fixture
+def completed_live(fake_live_source):
+    session = live.LiveSession(project_root(), "https://camera/live", max_seconds=1).start()
+    session.thread.join(4)
+    assert not session.running
+    assert session.error is None
+    assert session.result is not None
+    return session
+
+
+def test_live_archive_reconstructs_and_runs_in_sumo(completed_live):
+    from smarttraffic_ai.scene import SceneSettings, analyze_video
+    from smarttraffic_ai.scene_sumo import generate_scene, run_scene
+    from smarttraffic_ai.simulation import binary
+
+    result = completed_live.result
+    directory = Path(result["directory"])
+    records = [
+        json.loads(line) for line in (directory / "observations.jsonl").read_text().splitlines()
+    ]
+    assert len(records) == result["frames"]
+    assert records[0]["seconds"] == 0
+    assert records[-1]["seconds"] + records[-1]["duration"] == result["duration_seconds"]
+    assert all(obj["category"] == "car" for frame in records for obj in frame["objects"])
+    assert cv2.imread(str(directory / "preview.jpg")) is not None
+    scene = analyze_video(
+        directory / "analysis.json",
+        SceneSettings(track_directions={1: "N"}, simulation_seconds=30, arm_length=50),
+    )
+    assert next(a for a in scene.approaches if a.id == "N").initial_vehicles["car"] == 1
+    assert scene.observation_seconds == result["duration_seconds"]
+    assert scene.provenance["source_kind"] == "live"
+    try:
+        binary("sumo")
+        binary("netconvert")
+    except FileNotFoundError:
+        pytest.skip("SUMO unavailable; archive reconstruction verified")
+    generated = generate_scene(project_root(), scene)
+    metrics = run_scene(project_root(), generated)["metrics"]
+    assert metrics["demand"] == metrics["arrived"] == 1
+
+
+def test_scene_selects_completed_live_and_can_reopen_saved_result(completed_live):
+    from streamlit.testing.v1 import AppTest
+
+    script = (
+        "from smarttraffic_ai.config import project_root\n"
+        "from smarttraffic_ai.dashboard_scene import render_scene_tab\n"
+        "render_scene_tab(project_root(), True)\n"
+    )
+    app = AppTest.from_string(script)
+    app.session_state["live_session"] = completed_live
+    app.run()
+    assert not app.exception
+    assert app.radio[0].value == "Legutóbbi élő vizsgálat"
+    assert app.session_state["live_result"]["directory"] == completed_live.result["directory"]
+    # A new browser session has no LiveSession object; the files remain selectable.
+    reopened = AppTest.from_string(script).run()
+    reopened.radio[0].set_value("Mentett eredmény").run()
+    assert not reopened.exception
+    assert (
+        Path(reopened.selectbox[0].value)
+        == Path(completed_live.result["directory"]) / "analysis.json"
+    )
+
+
+def test_interrupted_live_preserves_only_completed_observations(fake_live_source, monkeypatch):
+    calls = 0
+    original = live._objects
+
+    def interrupted(*args):
+        nonlocal calls
+        calls += 1
+        if calls == 5:
+            raise RuntimeError("connection lost")
+        return original(*args)
+
+    monkeypatch.setattr(live, "_objects", interrupted)
+    session = live.LiveSession(project_root(), "https://camera/live", max_seconds=3).start()
+    session.thread.join(4)
+    result = session.result
+    assert result["error"] == "connection lost"
+    assert result["frames"] == 4
+    records = [
+        json.loads(line)
+        for line in (Path(result["directory"]) / "observations.jsonl").read_text().splitlines()
+    ]
+    assert len(records) == 4
+    assert records[-1]["seconds"] + records[-1]["duration"] == result["duration_seconds"]
 
 
 def test_dashboard_live_start_stop_and_blob_error(fake_live_source):
@@ -193,6 +287,7 @@ def test_dashboard_live_start_stop_and_blob_error(fake_live_source):
         assert not session.running
         app.run()
         assert not app.exception
+        assert app.session_state["live_result"]["directory"] == session.result["directory"]
         app.text_input[0].set_value("blob:https://camera/123").run()
         assert app.error
         assert app.button[0].disabled
@@ -230,6 +325,7 @@ def test_dashboard_snapshot_has_per_image_counts(fake_live_source, monkeypatch):
         app.run()
         assert not app.exception
         assert session.event["counts"]["car"] == 1
+        assert session.result is None
         assert any("Ezen a képen" in table.value.columns for table in app.dataframe)
         assert any("nincs folyamatos videó" in info.value for info in app.info)
     finally:

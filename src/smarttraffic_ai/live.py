@@ -17,6 +17,7 @@ import yaml
 
 from smarttraffic_ai.config import load_yaml
 from smarttraffic_ai.detection import TRAFFIC_CATEGORIES, DetectionConfig, YoloDetector
+from smarttraffic_ai.simulation import output_directory, save_json
 from smarttraffic_ai.traffic_lights import LightAnalyzer, annotate_lights
 from smarttraffic_ai.video import TrackCounter, TrackedObject, _annotate, _objects
 from smarttraffic_ai.youtube_source import resolve_youtube, youtube_url
@@ -376,6 +377,7 @@ class LiveSession:
         self.lock = threading.Lock()
         self.heartbeat = time.monotonic()
         self.event = None
+        self.result = None
         self.status = "Kapcsolódás és modellbetöltés…"
         self.error = None
         self.thread = threading.Thread(target=self._run, daemon=True)
@@ -398,6 +400,10 @@ class LiveSession:
 
     def _run(self):
         reader = None
+        observations = None
+        directory = None
+        origin = None
+        analysis_started = time.monotonic()
         try:
             source = resolve_source(self.source)
             if self.stop_event.is_set():
@@ -454,22 +460,55 @@ class LiveSession:
                         previous = stamp
                         continue
                     duration = observation_duration(stamp, previous, self.fps)
+                    if origin is None:
+                        origin = stamp
+                        directory = output_directory(self.root, "live")
+                        observations = (directory / "observations.jsonl").open(
+                            "w", encoding="utf-8"
+                        )
+                    seconds = stamp - origin
                     objects = _objects(detector, frame, tracker, low)
                     counter.update(seconds, duration, objects)
                     readings = lights.update(frame, objects, seconds, duration)
                     image = annotate_lights(_annotate(frame, objects, counter), readings)
+                    height, width = frame.shape[:2]
+                    observations.write(
+                        json.dumps(
+                            {
+                                "seconds": seconds,
+                                "duration": duration,
+                                "frame_index": frames,
+                                "objects": [
+                                    {
+                                        "track_id": obj.track_id,
+                                        "category": obj.category,
+                                        "bbox": [
+                                            max(0.0, min(1.0, value / scale))
+                                            for value, scale in zip(
+                                                obj.bbox, (width, height, width, height)
+                                            )
+                                        ],
+                                    }
+                                    for obj in objects
+                                    if obj.category in TRAFFIC_CATEGORIES
+                                ],
+                            }
+                        )
+                        + "\n"
+                    )
                     frames += 1
                     event = {
                         "image": image,
                         "received_at": stamp,
                         "seconds": seconds,
                         "frames": frames,
+                        "sample_duration_seconds": duration,
                         "summary": counter.summary(),
                         "tracks": counter.rows(),
                         "lights": readings,
                         "traffic_lights": lights.summary(),
                     }
-                    # Live mode retains the latest snapshot, not a frame-by-frame archive.
+                    # Positions go to disk; only the latest preview remains in memory.
                     lights.rows.clear()
                     with self.lock:
                         self.event = event
@@ -482,6 +521,42 @@ class LiveSession:
             self.status = "Az élő elemzés megszakadt."
         finally:
             self.stop_event.set()
+            if observations is not None:
+                observations.close()
+            if directory is not None and self.event is not None:
+                try:
+                    import cv2
+
+                    result = {
+                        key: value
+                        for key, value in self.event.items()
+                        if key not in {"image", "received_at", "seconds"}
+                    }
+                    result.update(
+                        input_name="Live " + (urlsplit(self.source).hostname or "camera"),
+                        input_sha256=hashlib.sha256(directory.name.encode()).hexdigest(),
+                        source_kind="live",
+                        time_basis="monotonic seconds since first analyzed frame",
+                        requested_seconds=self.max_seconds,
+                        duration_seconds=(
+                            self.event["seconds"] + self.event["sample_duration_seconds"]
+                        ),
+                        processing_seconds=time.monotonic() - analysis_started,
+                        fps=self.fps,
+                        width=width,
+                        height=height,
+                        config=config.model_dump(),
+                        directory=str(directory),
+                        error=self.error,
+                    )
+                    ok, preview = cv2.imencode(".jpg", self.event["image"])
+                    if not ok:
+                        raise ValueError("Could not save live preview")
+                    (directory / "preview.jpg").write_bytes(preview.tobytes())
+                    save_json(directory / "analysis.json", result)
+                    self.result = result
+                except Exception as exc:
+                    self.error = str(exc)
             if reader is not None:
                 reader.thread.join(timeout=11)
             if self.error is None:
