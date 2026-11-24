@@ -154,11 +154,13 @@ def test_dashboard_can_process_a_video_sample(sample_video):
     assert not app.exception
     app.radio[0].set_value("Mintavideó").run()
     assert not app.exception
+    app.selectbox(key="video-analysis-fps").set_value(30).run()
     next(b for b in app.button if b.label == "Videó feldolgozása").click().run(timeout=20)
     assert not app.exception
     assert app.session_state["video_result"]["frames"] == 8
     assert app.session_state["video_result"]["summary"]["total_unique"] == 1
     assert app.session_state["video_result"]["traffic_lights"][0]["kind"] == "vehicle"
+    assert app.session_state["video_result"]["sampling"]["requested_fps"] == 30
 
 
 def test_failed_inference_closes_encoder(sample_video, monkeypatch):
@@ -238,3 +240,151 @@ def test_video_exports_selected_profile_without_skipping_frames(
     assert result["config"]["model_path"] == config.model_path
     assert result["frames"] == 8 and result["duration_seconds"] == pytest.approx(0.8)
     assert result["summary"]["total_unique"] == 1 and result["processing_fps"] > 0
+
+
+def test_registered_sample_loads_its_scene_zones(sample_video):
+
+    from streamlit.testing.v1 import AppTest
+
+    from smarttraffic_ai.detection import Region
+    from smarttraffic_ai.flow import CameraProfile, CountingLine
+
+    root = project_root()
+    result = process_video(root, sample_video)
+    camera = CameraProfile(
+        camera_id="own-camera",
+        reference_size=(64, 64),
+        zones=[Region(id="road", direction="E", bounds=(0, 0, 1, 1))],
+        lines=[
+            CountingLine(
+                id="local-passage",
+                zone_id="road",
+                approach="E",
+                start=(0.5, 0.1),
+                end=(0.5, 0.9),
+                role="discharge",
+            )
+        ],
+    )
+    camera_path = root / "config/cameras/own-camera.json"
+    camera_path.write_text(camera.model_dump_json(), encoding="utf-8")
+    (root / "config/video-samples.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "videos": [
+                    {
+                        "path": str(sample_video),
+                        "label": "Own sample",
+                        "sha256": result["input_sha256"],
+                        "camera_profile": "config/cameras/own-camera.json",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    app = AppTest.from_string(
+        "from smarttraffic_ai.config import project_root\n"
+        "from smarttraffic_ai.dashboard_scene import render_scene_tab\n"
+        "render_scene_tab(project_root(), True)\n"
+    )
+    app.session_state["video_result"] = result
+    app.session_state["scene-input"] = "Legutóbbi videó"
+    app.run()
+    assert not app.exception
+    assert next(
+        c for c in app.checkbox if c.label == "A videóhoz előkészített zónák használata"
+    ).value
+    summary = next(
+        table.value for table in app.dataframe if "Kezdeti szimulált terhelés" in table.value
+    )
+    assert summary.loc[summary["Ág"] == "E", "Kezdeti szimulált terhelés"].iloc[0] == 1
+
+
+@pytest.mark.parametrize("limit", [15, 30])
+def test_explicit_fps_copy_preserves_video_time_and_tracking(sample_video, limit):
+    from pathlib import Path
+
+    from smarttraffic_ai.scene import SceneSettings, analyze_video
+    from smarttraffic_ai.video_proxy import prepare_analysis_video
+
+    source = project_root() / "high-fps.mp4"
+    writer = cv2.VideoWriter(str(source), cv2.VideoWriter_fourcc(*"mp4v"), 120, (64, 64))
+    for _ in range(120):
+        writer.write(np.zeros((64, 64, 3), dtype=np.uint8))
+    writer.release()
+    original_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+    config = {
+        "profiles": {
+            original_sha: [{"id": "original-signal", "kind": "vehicle", "bounds": [0, 0, 0.5, 0.5]}]
+        }
+    }
+    (project_root() / "config/traffic-lights.yaml").write_text(
+        yaml.safe_dump(config), encoding="utf-8"
+    )
+    result = process_video(project_root(), source, analysis_fps=limit)
+    assert result["frames"] == limit and result["fps"] == limit
+    assert result["duration_seconds"] == pytest.approx(1)
+    assert result["tracks"][0]["visible_seconds"] == pytest.approx(1)
+    assert result["summary"]["total_unique"] == 1
+    assert result["tracker"]["track_buffer"] == max(1, round(30 * limit / 120))
+    assert result["light_regions"][0]["id"] == "original-signal"
+    assert result["original_input_sha256"] == original_sha
+    assert result["input_sha256"] != original_sha
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == original_sha
+    scene = analyze_video(
+        Path(result["directory"]) / "analysis.json", SceneSettings(track_directions={1: "N"})
+    )
+    assert scene.observation_seconds == pytest.approx(1)
+    assert "temporal_sampling" in scene.provenance
+    path, cached = prepare_analysis_video(project_root(), source, original_sha, limit)
+    assert cached["cache_hit"] and path == Path(result["input_path"])
+
+
+def test_fps_cap_does_not_upsample_a_slower_source(sample_video):
+    result = process_video(project_root(), sample_video, analysis_fps=30)
+    assert not result["sampling"]["resampled"]
+    assert result["frames"] == 8 and result["fps"] == 10
+
+
+def test_bad_fps_limit_is_rejected(sample_video):
+    with pytest.raises(ValueError, match="15 vagy 30"):
+        process_video(project_root(), sample_video, analysis_fps=60)
+
+
+def test_proxy_conversion_error_keeps_original_and_discards_temporary_file(
+    sample_video, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from smarttraffic_ai import video_proxy
+
+    original = sample_video.read_bytes()
+    digest = hashlib.sha256(original).hexdigest()
+    # Force conversion for the small 10 FPS fixture.
+    original_capture = cv2.VideoCapture
+
+    class Capture:
+        def __init__(self, path):
+            self.capture = original_capture(path)
+
+        def isOpened(self):
+            return self.capture.isOpened()
+
+        def get(self, key):
+            return 120 if key == cv2.CAP_PROP_FPS else self.capture.get(key)
+
+        def release(self):
+            self.capture.release()
+
+    monkeypatch.setattr(cv2, "VideoCapture", Capture)
+    monkeypatch.setattr(
+        video_proxy.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1, stderr=b"decode error"),
+    )
+    with pytest.raises(RuntimeError, match="decode error"):
+        video_proxy.prepare_analysis_video(project_root(), sample_video, digest, 30)
+    assert sample_video.read_bytes() == original
+    directory = project_root() / "outputs" / f"video-proxy-{digest[:16]}-30"
+    assert not list(directory.iterdir())

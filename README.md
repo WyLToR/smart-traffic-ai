@@ -1,18 +1,49 @@
 # SmartTraffic AI
 
-Forgalomelemző és jelzőlámpa-vezérlést összehasonlító egyetemi projekt Python, SUMO és YOLO használatával. A lámpavezérlés kizárólag szimulációban működik.
+Forgalomelemző és jelzőlámpa-vezérlést összehasonlító egyetemi projekt (Mesterséges intelligencia alapjai). Közlekedési képen vagy videón YOLO-modellel felismeri és ByteTrackkel követi a közlekedőket, a megfigyelésből SUMO-forgatókönyvet készít, majd fix és adaptív jelzőlámpa-vezérlést hasonlít össze. A lámpavezérlés kizárólag szimulációban működik.
+
+Beadási dokumentáció: [projektleírás](docs/project-documentation.md), [bemutatási útmutató](docs/demo.md), [források és licencek](docs/sources.md).
 
 ## Telepítés
 
-A projekt gyökerében, telepített `uv` mellett:
+Feltétel: 64 bites Python 3.12, [`uv`](https://docs.astral.sh/uv/), és a PATH-ban elérhető FFmpeg (videóelemzéshez). A projekt gyökerében:
 
 ```bash
-uv sync --locked --python 3.12 --extra dev --extra sumo
+uv sync --locked --python 3.12 --extra dev --extra sumo --extra vision
 ```
 
-Ez telepíti a Python-függőségeket és a SUMO-t. Meglévő rendszerszintű SUMO esetén a `sumo` extra elhagyható. A képfeldolgozás külön telepítést és helyi modellfájlt igényel: [YOLO beállítása](docs/ai-model.md).
+Ez a lock alapján telepíti a Python-függőségeket, a SUMO-t (`eclipse-sumo`), valamint a YOLO-hoz szükséges Ultralytics, PyTorch (Windows alatt CPU-s változat) és OpenCV csomagokat. Tiszta másolatban Windows alatt ellenőrizve: a teljes tesztkészlet így lefut. Meglévő rendszerszintű SUMO esetén a `sumo` extra elhagyható; a `vision` extra nélkül csak a SUMO-rész használható.
 
-Már beállított környezetben a lenti `--no-sync` parancsokat használd. Így a `uv` nem cseréli le a külön telepített CPU-s PyTorchot. Részletes telepítés és hibaelhárítás: [installation.md](docs/installation.md).
+Az első `uv sync` után a lenti `uv run --no-sync` parancsokat használd. Ha a PyTorchot kézzel, más változatban telepítetted (lásd [ai-model.md](docs/ai-model.md)), a `--no-sync` megakadályozza, hogy a `uv` lecserélje. Részletes telepítés és hibaelhárítás: [installation.md](docs/installation.md).
+
+### Modellfájlok
+
+A YOLO-súlyok nincsenek a repositoryban. A három profil modellje egyenként, a hivatalos Ultralytics-kiadásból tölthető le a `models/` mappába (összesen kb. 64 MB):
+
+```bash
+uv run --no-sync python -m smarttraffic_ai download-model --profile fast       # yolo11n.pt
+uv run --no-sync python -m smarttraffic_ai download-model --profile balanced   # yolo26n.pt
+uv run --no-sync python -m smarttraffic_ai download-model --profile detailed   # yolo26l.pt
+```
+
+Internet nélküli bemutatóhoz ezt előre kell elvégezni; utána a program nem tölt le semmit.
+
+## Rövid bemutató
+
+A bemutató mintavideója a Pexels felhasználási feltételei miatt nincs a repositoryban; előbb a [data/README.md](data/README.md#bemutató-minták-samplesdemo-beszerzendő) szerint, SHA-256-ellenőrzéssel töltsd le a `data/samples/demo/` mappába (kb. 7 MB, egyszer kell internet).
+
+1. `uv run --no-sync python -m smarttraffic_ai dashboard`, majd a böngészőben `http://localhost:8501`.
+2. **Képfeldolgozás**: töltsd fel a `data/samples/demo/busy_intersection_frame_008.jpg` képet, és kattints a **Kép feldolgozása** gombra.
+3. **Videóelemzés → Mintavideó**: válaszd a **Bemutató – Busy Intersection** mintát, Villámgyors profillal, majd **Videó feldolgozása** (CPU-n kb. 40–100 s).
+4. **Kép/videó → SUMO → Legutóbbi videó**: a mintához előkészített zónák (bal útszakasz N, jobb útszakasz E) automatikusan betöltődnek. Válaszd a foglaltsággal súlyozott érkezést, pipáld be az ellenőrzést, majd **SUMO-forgatókönyv létrehozása** és **Fix és adaptív összehasonlítása**.
+
+Ugyanez parancssorból, felület nélkül:
+
+```bash
+uv run --no-sync python -m smarttraffic_ai reconstruct --input data/samples/demo/busy_intersection.mp4 --settings config/scene-busy-intersection.yaml --compare
+```
+
+Részletes, 5–8 perces menetrend és a várható eredmények: [demo.md](docs/demo.md).
 
 ## Futtatás
 
@@ -40,6 +71,12 @@ A három beépített forgatókönyv: `balanced`, `rush-hour`, `variable`. Mindeg
 
 A dashboard **Videóelemzés** lapján feltölthetsz MP4-et, vagy választhatsz a letöltött mintavideók közül. A **Videó feldolgozása** gomb után látszik az előnézet, a pillanatnyi és az összesített számláló, valamint az éppen látott azonosítók ideje.
 
+A fejlesztői gépen a **Mintavideó** listában az `IMG_6277.MP4` saját kereszteződési felvétel és az első
+5 másodpercéből készült próba is szerepel; ezek adatvédelmi okból nem részei a repositorynak és a beadási csomagnak. Ehhez előkészített járműjelző-lámpaterület és
+ellenőrizhető E/W megfigyelési zónák tartoznak. A teljes, kb. 120 FPS-es felvétel hosszú
+CPU-s feldolgozást igényel; első próbához válaszd az 5 másodperces változatot.
+Részletek: [saját felvétel és mintabeállítások](data/README.md).
+
 A kép-, videó- és élő feldolgozásnál három **Feldolgozási profil** választható:
 
 | Profil | Modell | Képméret | Confidence | Maximum találat |
@@ -49,16 +86,22 @@ A kép-, videó- és élő feldolgozásnál három **Feldolgozási profil** vál
 | Részletes | YOLO26l | 1280 | 0,15 | 1000 |
 
 A **Haladó felismerési beállítások** panelen a méret, küszöb és kategóriák módosíthatók.
-Ez nem írja át a konfigurációs fájlt. A Részletes profil CPU-n lassú: a helyi mérésben
-egy 2 másodperces videó feldolgozása kb. 69 másodperc volt. A nagyobb modell nem garantál
-minden kamerán jobb pontosságot. A profilok nem hagynak ki MP4-képkockákat.
+Ez nem írja át a konfigurációs fájlt. A Részletes profil CPU-n lassú: egy 2 másodperces,
+60 képkockás videó feldolgozása a helyi méréseken 49–69 másodperc volt. A nagyobb modell nem garantál
+minden kamerán jobb pontosságot. A profilválasztás önmagában nem csökkenti az MP4 képkockaszámát.
 
-Hiányzó modell a panelen vagy parancssorból tölthető le, hivatalos Ultralytics-forrásból:
+120 FPS-es videóhoz az **Elemzési képkockasebesség** mezőben külön választható
+**Legfeljebb 30 FPS** vagy **Legfeljebb 15 FPS**. Ehhez helyi elemzési másolat készül;
+az eredeti fájl megmarad, a videó időtartama nem gyorsul fel. Alapértelmezés az eredeti,
+minden képkockás mód. A ritkább mintavétel rövid észleléseket hagyhat ki és megváltoztathatja a követést.
+Az IMG_6277 öt másodperces próbáján 60,5 s helyett 15,3 s, illetve 8,3 s volt a feldolgozás.
+
+Hiányzó modell a panelen vagy a fenti `download-model` paranccsal tölthető le. Profilválasztás parancssorból:
 
 ```bash
-uv run --no-sync python -m smarttraffic_ai download-model --profile detailed
 uv run --no-sync python -m smarttraffic_ai detect --input kep.jpg --profile balanced
 uv run --no-sync python -m smarttraffic_ai analyze-video --input video.mp4 --profile fast
+uv run --no-sync python -m smarttraffic_ai analyze-video --input video.mp4 --profile fast --analysis-fps 30
 ```
 
 Mért idők, cache és memóriahiba esetén történő visszalépés: [feldolgozási profilok](docs/processing-profiles.md).
@@ -72,13 +115,19 @@ Az elemzés végén lejátszható és letölthető a jelölt videó. CSV/JSON ta
 
 A jelzőlámpák külön dobozt és táblázatot kapnak: piros, sárga, zöld, piros+sárga vagy ismeretlen állapottal. A szín a képből becsült. A gyalogos/jármű típust a **Lámpák és típusuk beállítása** panelen lehet megadni; a YOLO ezt önmagában nem különbözteti meg. A két mintavideóhoz van ellenőrzött lámpaterület-beállítás. A lámpák nem számítanak bele a közlekedők darabszámába.
 
+### Élő források (kísérleti) és adatvédelem
+
+A rendszer technikailag támogatja egyes élő videó- és kameraforrások feldolgozását. A projekt demonstrációja és értékelése azonban megfelelő felhasználási jogosultságú, előre rögzített felvételeken és szimulált forgalmi adatokon történik; a bemutatóhoz nem kell működő élő kamera vagy internet. A nyilvános kameraoldalak elérhetősége és felhasználási feltételei változhatnak, ezeket nem ellenőriztük. Egy nyilvánosan megtekinthető videó nem jelenti automatikusan, hogy szabadon letölthető, tárolható vagy újraterjeszthető.
+
+A program nem végez személyazonosítást vagy rendszámfelismerést; csak kategóriát, befoglaló téglalapot, követési azonosítót és időt tárol. A feltöltött és feldolgozott fájlok helyben, az `outputs/` alatt maradnak, automatikus törlés nélkül; ezek megőrzéséről vagy törléséről a felhasználó dönt. Élő forrásnál a teljes videó nem mentődik, a HLS-szegmensek ideiglenes fájljai leálláskor törlődnek; az elemzés eredménye és az utolsó előnézeti kép az `outputs/live-*` mappába kerül. Felhasznált minták és feltételeik: [sources.md](docs/sources.md).
+
 Élő videóhoz válaszd a **Videóelemzés → Élő forrás** lehetőséget. Illeszd be az Időkép kameraoldalának címét (például `https://www.idokep.hu/webkamera/hgabesz`), vagy egy közvetlen HLS/HTTP(S)/RTSP videócímet, majd kattints az **Élő elemzés indítása** gombra. A böngészős `blob:` cím nem használható; az Időkép-oldalból a program minden indításkor kiolvassa az aktuális HLS-forrást.
 
 Frissülő képes kamerák is megadhatók, például `https://www.idokep.hu/webkamera/kevenet`, illetve közvetlen JPG/PNG-címek. Ezeket a program 30 másodpercenként kéri le; változatlan képet nem elemez újra. Ilyenkor az adott kép közlekedőit jelöli és számolja, egyedi követési ID, összesített járműszám és láthatósági idő nélkül. A különálló képek közötti mozgás nem rekonstruálható; a lámpaszín is csak az adott képből becsült jelzés. A képek letöltési időpontja nem feltétlenül a felvétel készítési ideje.
 
 A Budapest Közút kameraoldalai is beilleszthetők, például `https://kozutfigyelo.budapestkozut.hu/list/camerahistory?id=10003`. A program a nyilvános API-ból a legfrissebb kameraképet kéri le, képenként elemzi, és kiírja a szolgáltató képidőbélyegét. Az oldal korábbi képeinek teljes lejátszását nem dolgozza fel.
 
-YouTube élő közvetítésnél a videó linkjét add meg, például `https://www.youtube.com/watch?v=HUeaYuBLNNQ`. A `youtube.com/watch`, `youtu.be`, `/live/` és `/embed/` alakokat felismeri, a beágyazási paramétereket elhagyja. Az aktuális HLS-forrást minden indításkor újra feloldja, legfeljebb 720p H.264 videót választ, a teljes közvetítést nem tölti le. Ehhez a `youtube` extra (`uv pip install -e '.[youtube]'`) és a PATH-ban Node.js 22+ vagy Deno 2.3+ szükséges. A helyi gépen ezek már be vannak állítva. Korlátozott, megszűnt vagy támogatott HLS nélküli videónál hibát jelez; nincs automatikus bejelentkezés vagy böngészős sütiolvasás. A YouTube változásai miatt a feloldót időnként frissíteni kell: `uv pip install -U 'yt-dlp[default]'`.
+YouTube élő közvetítésnél a videó linkjét add meg, például `https://www.youtube.com/watch?v=HUeaYuBLNNQ`. A `youtube.com/watch`, `youtu.be`, `/live/` és `/embed/` alakokat felismeri, a beágyazási paramétereket elhagyja. Az aktuális HLS-forrást minden indításkor újra feloldja, legfeljebb 720p H.264 videót választ, a teljes közvetítést nem tölti le. Ehhez a `youtube` extra (a telepítési parancs kiegészítése `--extra youtube` kapcsolóval) és a PATH-ban Node.js 22+ vagy Deno 2.3+ szükséges. Korlátozott, megszűnt vagy támogatott HLS nélküli videónál hibát jelez; nincs automatikus bejelentkezés vagy böngészős sütiolvasás. A YouTube változásai miatt a feloldót időnként frissíteni kell: `uv pip install -U 'yt-dlp[default]'`.
 
 Az élő előnézet dobozokkal, ID-kkel, becsült látható időkkel és számlálókkal frissül. Alapból 120 másodperces próba indul, legfeljebb 5 kép/másodperces elemzéssel; mindkettő állítható. A **Leállítás** gomb megszakítja a feldolgozást, utána JSON tölthető le. A felület bezárása után 30 másodperccel a feldolgozó automatikusan leáll. A teljes élő videót nem menti, a HLS-szegmensek ideiglenes fájljai leálláskor törlődnek.
 
@@ -144,18 +193,36 @@ Az optimalizálás `runs.csv` fájlja az egyes futásokat, a `comparison.csv` é
 ## Tesztelés
 
 ```bash
-uv run --no-sync python -m pytest
+uv run --no-sync python -m pytest -ra
 uv run --no-sync python -m ruff check .
+uv run --no-sync python -m compileall -q src
 ```
 
-A SUMO-t igénylő tesztek hiányzó szimulátornál kimaradnak. Az integrációs tesztek ideiglenes könyvtárban futnak, nem írnak a saját eredményeid közé. Részletek: [testing.md](docs/testing.md).
+Windows alatt a `scripts/check.ps1` mindhármat lefuttatja. Legutóbbi eredmény (2026. november 24.):
+195 teszt, 189 sikeres, 6 kihagyott, 0 hibás. A kihagyott 6 a valódi YOLO-inferencia opt-in tesztje;
+a bemutatóképpel külön futtatva mind sikeres. A SUMO-t, OpenCV-t vagy YOLO-t igénylő tesztek a
+hiányzó függőségnél kimaradnak. Az integrációs tesztek ideiglenes könyvtárban futnak, nem írnak
+a saját eredményeid közé. Részletek: [testing.md](docs/testing.md).
+
+## Mi ellenőrzött, mi kísérleti
+
+| Állapot | Funkció |
+|---|---|
+| Megvalósított, valódi futtatással ellenőrzött | JPG/PNG és MP4 felismerés mindhárom profillal, ByteTrack-követés, CSV/JSON és jelölt MP4 export, kép/videó → SUMO, fix és adaptív összehasonlítás, rácskereső optimalizálás, dashboard; SUMO-GUI-s futtatás (a metrikák egyeznek a GUI nélküli futáséval, az ablakot a bemutató előtt érdemes megnézni) |
+| Működik, de pontossága nem igazolt | Irányított vonalátlépés-számlálás, lámpaszínbecslés, foglaltsági érkezésbecslés |
+| Kísérleti | Mért érkezések SUMO-ba (ember által ellenőrzött referencia és alkalmas, rögzített kameranézet nélkül), élő kamera- és YouTube-források |
+| Nincs megvalósítva | Gyalogos/kerékpáros SUMO-forgalom, kalibrált valós geometria, valódi lámpaprogram, sebességmérés |
 
 ## Felépítés és korlátok
 
-A kód a `src/smarttraffic_ai/`, a konfiguráció a `config/`, a mintaforgatókönyvek a `data/scenarios/` alatt találhatók. A projekt az `MI` mappától független.
+A kód a `src/smarttraffic_ai/`, a konfiguráció a `config/`, a mintaforgatókönyvek a `data/scenarios/`, a beszerzendő bemutató minták helye a Gitből kizárt `data/samples/demo/`. A projekt nem függ a gitből kizárt `outputs/` korábbi tartalmától.
 
+- [Projektdokumentáció (beadandó)](docs/project-documentation.md)
+- [Bemutatási útmutató](docs/demo.md)
+- [Források és licencek](docs/sources.md)
 - [Architektúra és adatfolyam](docs/architecture.md)
 - [SUMO-hálózat és vezérlés](docs/sumo.md)
+- [Felismerési audit](docs/detection-audit.md), [feldolgozási profilok](docs/processing-profiles.md)
 - [Korlátok és következő feladatok](docs/limitations.md)
 
-Van konfigurálható vonalátlépés-számlálás és referenciaértékelés. Valós kereszteződésre kalibrált geometria és ember által igazolt kamerás pontosság még nincs. Külső képek és modellek eredetét, illetve felhasználási feltételeit külön kell rögzíteni.
+A felismerési pontosság csak kis, nem független mintán mért (11 autó, 5 gyalogos); a villamost a COCO-modellek buszként jelölik. Valós kereszteződésre kalibrált geometria és ember által igazolt kamerás pontosság még nincs. A felismerési és forgalommérési referenciák előkészítése: [detection-audit.md](docs/detection-audit.md#referenciaannotáció-előkészítése).

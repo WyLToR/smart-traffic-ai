@@ -1,0 +1,27 @@
+videos:
+# Az első elem a lista alapértéke: rövid, CPU-n gyorsan végigfuttatható minta.
+  - path: data/samples/demo/busy_intersection.mp4
+    label: Bemutató – Busy Intersection (Pexels, 20 s)
+    description: >-
+      Pexels-videó (SHOX ART), első 20 s, 1280×720, 30 FPS, 600 képkocka.
+      Nem része a repositorynak; beszerzés: data/README.md. A számlálóvonalak demonstrációs,
+      helyi áthaladást mérő vonalak.
+    sha256: 0880067fe1c79b31efba3fe9f22cb4bf75a6cdb27747d70ad8c76a5c54c729ca
+    camera_profile: config/cameras/busy-intersection.json
+  - path: outputs/img6277-validation/IMG_6277-preview-5s.mp4
+    label: Saját kereszteződés – 5 másodperces próba
+    description: >-
+      Az IMG_6277 első 5 másodpercéből készült átkódolt próbaminta.
+      1280×720, 120 FPS, mind a 600 képkocka megmaradt. Gyorsabb ellenőrzéshez válaszd ezt.
+    sha256: 1eae04010fead2e10ce4b78c461e0103ccb2a1dd2aa4945870e6d1a0406fddc8
+    camera_profile: config/cameras/img-6277.json
+  - path: runs/detect/outputs/video-preview/IMG_6277.MP4
+    label: Saját kereszteződés – IMG_6277
+    description: >-
+      Saját valós felvétel. 1280×720, kb. 120 FPS, 2 perc 22 másodperc.
+      A konténer 17 000 képkockát jelez, ebből 16 994 dekódolható.
+      Az eredeti fájl változatlan; CPU-n a teljes feldolgozás hosszú lehet.
+      A kamera kissé elmozdul, a zónákat és számlálóvonalakat ellenőrizni kell.
+    sha256: 8747e50d6bbb2f874961358d6ee84adf2d32a37b76784626f3b85465ee138f12
+    verified_decoded_frames: 16994
+    camera_profile: config/cameras/img-6277.json

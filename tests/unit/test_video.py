@@ -60,3 +60,27 @@ def test_repeated_timestamp_is_rejected():
     counter.update(0, 0.1, [])
     with pytest.raises(ValueError):
         counter.update(0, 0.1, [])
+
+
+def test_summary_stays_correct_after_confirmed_category_change_and_disappearance():
+    from collections import Counter
+
+    counter = TrackCounter(min_observations=2, min_visible_seconds=0.2)
+    frames = [
+        [observed(), observed(2, "person")],
+        [observed(), observed(2, "person")],
+        [observed(category="truck", confidence=1)],
+        [observed(category="truck", confidence=1)],
+        [],
+    ]
+    for index, objects in enumerate(frames):
+        counter.update(index / 10, 0.1, objects)
+        rows = counter.rows()
+        expected = Counter(row["category"] for row in rows)
+        summary = counter.summary()
+        assert summary["total_unique"] == len(rows)
+        assert all(value == expected[name] for name, value in summary["by_category"].items())
+    assert counter.summary()["by_category"]["truck"] == 1
+    assert counter.summary()["by_category"]["car"] == 0
+    assert counter.summary()["by_category"]["person"] == 1
+    assert counter.summary()["current_total"] == 0

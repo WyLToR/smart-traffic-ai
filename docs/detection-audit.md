@@ -158,3 +158,86 @@ majd `torch.cuda.is_available()` és rövid valódi inferencia ellenőrzése. A 
 a jelenlegi CPU-környezetet nem cseréltem le. Az NMS- és tracking-viselkedés háttere:
 [Ultralytics inferenciafejek](https://docs.ultralytics.com/guides/end2end-detection),
 [követés](https://docs.ultralytics.com/modes/track).
+
+## Újraellenőrzés – 2026. november 24.
+
+A fenti hat TP/FP/FN sort a jelenlegi kód változatlanul reprodukálta (ugyanaz a három kép és
+referencia, conf 0,25, két ismétlés). A három profil saját beállításával, öt ismétléssel:
+
+| Profil | Jármű TP/FP/FN | Gyalogos TP/FP/FN | Átlagos idő/kép |
+|---|---|---|---:|
+| Villámgyors, YOLO11n 640 / 0,25 | 10 / 0 / 1 | 3 / 0 / 2 | 50 ms |
+| Kiegyensúlyozott, YOLO26n 960 / 0,20 | 11 / 0 / 0 | 4 / 1 / 1 | 74 ms |
+| Részletes, YOLO26l 1280 / 0,15 | 11 / 0 / 0 | 5 / 0 / 0 | 855 ms |
+
+A referencia továbbra is a fenti, nem független jelölés. A szkript most járműcsoport és
+gyalogos szerinti összesítést és darabszámhibát (`count_error` = talált − referencia) is ír.
+Eredmények: `outputs/submission/detection/` (Gitből kizárva).
+
+## Referenciaannotáció előkészítése
+
+Három képhez modellből készült vázlat vár emberi javításra (`outputs/submission/annotation/`,
+Gitből kizárva, a képekkel együtt csak a fejlesztői gépen):
+
+| Kép | Jelenet | Vázlatobjektum |
+|---|---|---:|
+| `outputs/video-validation/frames/busy_intersection/frame_015.jpg` | nappali kereszteződés, gyalogosok és járművek | 36 |
+| `outputs/detection-audit/shinjuku-02.jpg` | éjszakai, zsúfolt | 62 |
+| `outputs/video-validation/frames/crosswalk_red_car/frame_015.jpg` | gyalogátkelő járművekkel | 29 |
+
+A vázlat a Részletes profil (YOLO26l) találata, ezért **önmagában nem referencia**: javítás
+nélkül a Részletes profil hibátlannak látszana. Nem kell újragenerálni; ha mégis kell, a
+`--draft-reference` kapcsolóval készül (lásd `scripts/audit_detection.py`).
+
+**Javítás**
+
+1. Másold a `detection-reference-draft.json` fájlt `detection-reference.json` néven ugyanoda;
+   a vázlat maradjon meg változatlanul.
+2. Nyisd meg mellé a `draft-run/draft-*.jpg` képet: a sárga doboz feliratának száma a JSON
+   `objects` listájának `number` mezője.
+3. Képenként (a JSON kulcsa a kép SHA-256-ja, a fájlnév az `input` mezőben):
+   - téves dobozt törölj; rossz kategóriát javíts (`car`, `bus`, `truck`, `motorcycle`,
+     `bicycle`, `person`);
+   - pontatlan dobozt igazíts; kihagyott objektumot vegyél fel:
+     `{"category": "person", "bbox": [x1, y1, x2, y2]}`. A koordináta pixel, a bal felső saroktól;
+     Paintben a kurzor helye a bal alsó sarokban látszik.
+   - a `number` és `confidence` mező a kiértékelésben nem számít, maradhat vagy törölhető;
+   - ha a kép egy része nem jelölhető megbízhatóan (távoli tömeg, takarás), szűkítsd a
+     `regions` téglalapját; csak a régión belüli objektumokat kell jelölni.
+4. Töltsd ki az `annotator` mezőt a javító(k) nevével, a `notes` mezőbe írd a döntéseket
+   (pl. félig takart járművek kezelése). A `human_reviewed` csak a kép teljes átnézése után
+   írható át `true`-ra, kézzel.
+
+**Kiértékelés**
+
+```powershell
+uv run --no-sync python scripts/audit_detection.py --profiles fast balanced detailed --repeats 3 `
+  --input outputs/video-validation/frames/busy_intersection/frame_015.jpg `
+          outputs/detection-audit/shinjuku-02.jpg `
+          outputs/video-validation/frames/crosswalk_red_car/frame_015.jpg `
+  --reference outputs/submission/annotation/detection-reference.json `
+  --output outputs/submission/detection/reviewed
+```
+
+Az `outputs/submission/detection/reviewed/comparison.json` minden sorában az `evaluation`
+tartalmazza a kategóriánkénti és a jármű/gyalogos csoportonkénti TP, FP, FN, precision,
+recall, F1 és `count_error` (talált − referencia) értékét, valamint a `human_reviewed`
+jelzőt. Egyeztetés: osztályhelyes, egy-egy értelmű, IoU ≥ 0,5. Az eredmény csak akkor
+kerülhet a projektdokumentációba, ha mindhárom kép `human_reviewed` értéke `true`.
+
+**Forgalomszámlálási referencia**
+
+Az `outputs/submission/annotation/flow-reference-template.json` két, egymást nem fedő 10 s-os
+szakaszt tartalmaz a 20 s-os bemutatóvideó méréséhez (`outputs/flow-16e3d088a312`), üres
+eseménylistával. A beszerzett `data/samples/demo/busy_intersection.mp4` lejátszásával, a
+mérés megnézése előtt minden gépjármű-vonalátlépéshez vegyél fel egy eseményt:
+`{"timestamp_seconds": 3.4, "line_id": "right-crossing", "vehicle_type": "car", "direction": "inbound"}`.
+A vonalak helyét és a beszámított irányt a mérés `flow-annotated.mp4` videója mutatja.
+Kiértékelés:
+
+```powershell
+uv run --no-sync python -m smarttraffic_ai evaluate-flow --measurement outputs/flow-16e3d088a312/measurement.json --reference outputs/submission/annotation/flow-reference-template.json
+```
+
+A mintán csak helyi áthaladási (`discharge`) vonalak vannak, ezért a riport kitöltve is
+legfeljebb a helyi áthaladás pontosságát méri, beérkezésmérésre nem hagy jóvá.

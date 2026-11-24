@@ -11,7 +11,13 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from smarttraffic_ai.config import load_yaml, project_root
-from smarttraffic_ai.detection import Detection, DetectionConfig, YoloDetector
+from smarttraffic_ai.detection import (
+    MOTOR_VEHICLES,
+    TRAFFIC_CATEGORIES,
+    Detection,
+    DetectionConfig,
+    YoloDetector,
+)
 from smarttraffic_ai.profiles import DETECTION_PROFILES
 
 
@@ -65,22 +71,61 @@ def evaluate(objects, reference, threshold=0.5):
 
     for index in range(len(predicted)):
         augment(index, set())
-    rows = {}
-    for category in sorted({obj["category"] for obj in [*targets, *predicted]}):
-        tp = sum(targets[index]["category"] == category for index in matched)
-        actual = sum(obj["category"] == category for obj in targets)
-        detected = sum(obj["category"] == category for obj in predicted)
-        precision = tp / detected if detected else None
-        recall = tp / actual if actual else None
-        rows[category] = {
+
+    def scores(categories):
+        tp = sum(targets[index]["category"] in categories for index in matched)
+        actual = sum(obj["category"] in categories for obj in targets)
+        detected = sum(obj["category"] in categories for obj in predicted)
+        return {
             "tp": tp,
             "fp": detected - tp,
             "fn": actual - tp,
-            "precision": precision,
-            "recall": recall,
+            "precision": tp / detected if detected else None,
+            "recall": tp / actual if actual else None,
             "f1": 2 * tp / (actual + detected) if actual + detected else None,
+            "count_error": detected - actual,
         }
-    return {"iou_threshold": threshold, "categories": rows}
+
+    categories = sorted({obj["category"] for obj in [*targets, *predicted]})
+    return {
+        "iou_threshold": threshold,
+        "human_reviewed": bool(reference.get("human_reviewed", False)),
+        "categories": {category: scores({category}) for category in categories},
+        "groups": {"vehicles": scores(set(MOTOR_VEHICLES)), "person": scores({"person"})},
+    }
+
+
+def draft(path, source_id, image, objects, config, output):
+    """Model proposal for manual correction in the reference format; never a verified label."""
+    preview = image.copy()
+    draw = ImageDraw.Draw(preview)
+    for number, obj in enumerate(objects):
+        draw.rectangle(obj.bbox, outline="yellow", width=2)
+        draw.text((obj.bbox[0] + 2, obj.bbox[1] + 2), f"{number} {obj.category}", fill="yellow")
+    preview.save(output / f"draft-{path.parent.name}-{path.stem}.jpg")
+    return {
+        "input": str(path),
+        "image_sha256": source_id,
+        "annotator": f"VÁZLAT: {Path(config.model_path).name} találatai, emberi ellenőrzés nélkül",
+        "human_reviewed": False,
+        "notes": (
+            "Javítandó: hiányzó objektumok felvétele, téves dobozok törlése, kategória és doboz "
+            "igazítása. A régiót szűkítsd a megbízhatóan jelölhető területre. Csak teljes kézi "
+            "ellenőrzés után állítható a human_reviewed igazra, az annotátor nevével."
+        ),
+        "regions": [
+            {"categories": list(TRAFFIC_CATEGORIES), "bbox": [0, 0, image.width, image.height]}
+        ],
+        "objects": [
+            {
+                "number": number,
+                "category": obj.category,
+                "bbox": [round(value, 1) for value in obj.bbox],
+                "confidence": round(obj.confidence, 3),
+            }
+            for number, obj in enumerate(objects)
+        ],
+    }
 
 
 def sliced(detector, image):
@@ -136,9 +181,13 @@ def main():
     parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--slicing", action="store_true")
     parser.add_argument("--output", type=Path, default=Path("outputs/detection-audit/comparison"))
+    parser.add_argument("--draft-reference", type=Path, help="Write a reference draft to review")
     args = parser.parse_args()
     if args.repeats < 1:
         parser.error("repeats must be positive")
+    if args.draft_reference and (not args.profiles or len(args.profiles) != 1):
+        parser.error("--draft-reference needs exactly one --profiles value")
+    drafts = {}
     root = project_root()
     config = load_yaml(root / "config/detection.yaml", DetectionConfig)
     references = json.loads(args.reference.read_text(encoding="utf-8")) if args.reference else {}
@@ -239,6 +288,12 @@ def main():
                             json.dumps(rows, indent=2), encoding="utf-8"
                         )
                         print(name, row["counts"], round(row["mean_seconds"], 3), flush=True)
+                        if args.draft_reference:
+                            drafts[source_id] = draft(path, source_id, image, objects, base, output)
+    if args.draft_reference:
+        args.draft_reference.write_text(
+            json.dumps(drafts, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
 
 
 if __name__ == "__main__":

@@ -46,6 +46,18 @@ def test_two_state_pedestrian_profile_does_not_interpret_yellow_background_as_si
     assert read_color(signal("yellow", "green"), (0, 0, 40, 90), "pedestrian")[0] == "green"
 
 
+def test_camera_brightness_threshold_excludes_dim_amber_reflection():
+    frame = signal("red")
+    cv2.circle(frame, (20, 45), 7, (0, 150, 150), -1)
+    assert read_color(frame, (0, 0, 40, 90), "vehicle")[0] == "red-yellow"
+    analyzer = LightAnalyzer(
+        [LightRegion(id="sunlit-signal", kind="vehicle", bounds=(0, 0, 1, 1), min_brightness=200)]
+    )
+    for index in range(3):
+        result = analyzer.update(frame, [], index / 120, 1 / 120)
+    assert result[0]["state"] == "red"
+
+
 def test_color_change_requires_confirmation_and_does_not_reuse_old_green():
     analyzer = LightAnalyzer([LightRegion(id="signal", kind="vehicle", bounds=(0, 0, 1, 1))])
     for index in range(3):

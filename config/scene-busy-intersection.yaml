@@ -1,0 +1,25 @@
+# Bemutató-beállítás a busy_intersection.mp4 nézetéhez és annak kimentett képkockáihoz.
+# A zónák a config/cameras/busy-intersection.json háttérútját fedik: bal oldal = N,
+# jobb oldal = E sablonág. Ez felhasználói megfeleltetés, nem felismert égtáj.
+# A gyalogátkelő előtere kívül esik a zónákon; a gyalogosok amúgy sem kerülnek SUMO-ba.
+intersection_type: four_way
+lanes: 1
+arm_length: 250
+speed_kmh: 50
+signalized: true
+simulation_seconds: 300
+warmup_seconds: 5
+seed: 42
+turns: {straight: 0.8, left: 0.1, right: 0.1}
+# A későbbi érkezés feltételezés: 300 jármű/óra/megfigyelt ág (a dashboard alapértéke),
+# a foglaltság arányában elosztva. Az állóképen látott járművek csak kezdeti terhelést adnak.
+arrival_mode: occupancy-weighted
+prior_rate: 300
+video_window_seconds: 10
+regions:
+  - id: left-road
+    direction: N
+    bounds: [0, 0.5, 0.5, 0.7]
+  - id: right-road
+    direction: E
+    bounds: [0.5, 0.5, 1, 0.7]

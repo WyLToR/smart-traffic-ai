@@ -19,6 +19,7 @@ from smarttraffic_ai.flow import (
     select_arrivals,
 )
 from smarttraffic_ai.flow_validation import ManualReference, ValidationReport, evaluate_flow
+from smarttraffic_ai.samples import sample_for_hash, video_digest
 from smarttraffic_ai.simulation import save_json
 
 ROLES = {"entry": "Új belépés", "discharge": "Helyi/stopvonali áthaladás"}
@@ -240,6 +241,13 @@ def render_flow_tab(root: Path):
     if not files:
         st.info("Előbb dolgozz fel egy MP4-videót a Videóelemzés lapon.")
         return
+    latest = st.session_state.get("video_result")
+    if latest:
+        # A newly processed video becomes the selection once; later manual choices persist.
+        current = Path(latest["directory"]) / "analysis.json"
+        if st.session_state.get("flow-analysis-seen") != str(current) and current in files:
+            st.session_state["flow-analysis"] = current
+            st.session_state["flow-analysis-seen"] = str(current)
     analysis = st.selectbox(
         "Videófelismerés a forgalomméréshez",
         files,
@@ -250,10 +258,20 @@ def render_flow_tab(root: Path):
     raw = Path(data.get("input_path", ""))
     if not raw.is_file():
         raw = root / "outputs/video-validation/videos" / data.get("input_name", "")
-    if raw.is_file() and hashlib.sha256(raw.read_bytes()).hexdigest() == data["input_sha256"]:
-        with st.expander("Eredeti videó a kézi ellenőrzéshez (számlálási feliratok nélkül)"):
+    if raw.is_file() and video_digest(raw) == data["input_sha256"]:
+        label = (
+            "Elemzett, ritkább FPS-es változat a kézi ellenőrzéshez"
+            if data.get("sampling", {}).get("resampled")
+            else "Eredeti videó a kézi ellenőrzéshez (számlálási feliratok nélkül)"
+        )
+        with st.expander(label):
             st.video(str(raw))
     profiles = sorted((root / "config/cameras").glob("*.json"))
+    sample = sample_for_hash(root, data.get("original_input_sha256", data["input_sha256"]))
+    if st.session_state.get("flow-preset-source") != str(analysis):
+        preset_path = root / sample.camera_profile if sample and sample.camera_profile else None
+        st.session_state["flow-preset"] = preset_path if preset_path in profiles else None
+        st.session_state["flow-preset-source"] = str(analysis)
     chosen = st.selectbox(
         "Mentett kamerabeállítás",
         [None, *profiles],

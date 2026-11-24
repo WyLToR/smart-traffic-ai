@@ -5,17 +5,25 @@ Ajánlott a 64 bites Python 3.12. A projektet a repository gyökeréből futtasd
 ## Új környezet
 
 ```bash
-uv sync --locked --python 3.12 --extra dev --extra sumo
+uv sync --locked --python 3.12 --extra dev --extra sumo --extra vision
+uv run --no-sync python -m smarttraffic_ai download-model --profile balanced
 ```
+
+A `vision` extra a lock szerinti Ultralyticset, OpenCV-t és PyTorchot telepíti; Windows alatt
+ez CPU-s PyTorch (2026. 11. 24-én a végleges állapot tiszta másolatában: `torch 2.15.0+cpu`, 189 sikeres teszt).
+A többi profil modellje a `--profile fast` és `--profile detailed` paraméterrel tölthető le.
+Csak SUMO-hoz a `vision` extra elhagyható; ekkor a kép- és videótesztek kimaradnak.
 
 `uv` nélkül, PowerShellben:
 
 ```powershell
 py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev,sumo]"
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,sumo,vision]"
 ```
 
-A `vision` extra és a YOLO-súly külön telepítendő: [ai-model.md](ai-model.md). Meglévő, kézzel beállított CPU-s PyTorch mellett a `uv run --no-sync` megőrzi a környezetet; egy új `uv sync` a lock alapján újraszinkronizálja azt.
+Meglévő, kézzel beállított PyTorch mellett a `uv run --no-sync` megőrzi a környezetet; egy új
+`uv sync` a lock alapján újraszinkronizálja, és a lockban nem szereplő extrákat eltávolítja.
+Ezért a `uv sync` parancsban mindig add meg az összes használt extrát.
 
 ## SUMO
 

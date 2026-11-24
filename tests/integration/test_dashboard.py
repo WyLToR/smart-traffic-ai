@@ -32,3 +32,7 @@ def test_dashboard_can_simulate_and_reopen_same_result():
         button for button in app.button if button.label == "Mentett eredmény megnyitása"
     ).click().run()
     assert not app.exception
+    # A later rerun (e.g. a download click) keeps the opened result visible.
+    app.run()
+    assert not app.exception
+    assert any(header.value.startswith("Megnyitott eredmény") for header in app.subheader)

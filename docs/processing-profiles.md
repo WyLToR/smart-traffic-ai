@@ -52,6 +52,55 @@ a visszalépési ág célzott, szimulált hibával tesztelt.
 
 Nincs automatikus MP4-képkockakihagyás, slicing vagy SAHI. A korábbi szeletelési kísérlet
 nem adott elég előnyt a költségéhez képest; az auditáló scriptben továbbra is külön kapcsolható.
+A YOLO26l-lel is lefutott a szeletelési próba: a kijelölt éjszakai régiókban mindkét mód
+8 autót és 2 személyt talált helyesen, téves találat nélkül. A külön mérésben a normál mód
+1,21 s, a szeletelt 4,38 s volt. Ezen a mintán ez nem indokolta a felületi bekapcsolását.
+
+## Külön választható FPS-korlát
+
+Az **Elemzési képkockasebesség** a profiltól független választás. Alapértéke továbbra is
+**Eredeti – minden képkocka**. A 30 vagy 15 FPS-es korlát csak a magasabb FPS-es forrásból
+készít külön H.264 elemzési másolatot. Kisebb FPS-es bemenetet nem gyorsít és nem szaporít fel.
+Az eredeti fájl változatlan; a detektor a kiválasztott másolat minden képkockáját feldolgozza.
+
+Az FFmpeg az időtengely mentén ritkít, a felvétel normál sebességű marad. Az időbélyegek,
+láthatósági idők és SUMO-megfigyelési ablakok az elemzett másolat másodperceit követik.
+A CFR-re alakítás kerekítési eltérést okozhat; ez nem gyorsított lejátszás.
+Az átkódolás képi tömörítési eltérést is okozhat, ezért nem csak a ritkább mintavétel
+befolyásolhatja a felismeréseket.
+A ByteTrack elveszett trackekre vonatkozó pufferét az FPS-arány szerint csökkentjük,
+hogy hozzávetőleg ugyanannyi kiesett időt engedjen meg. Az ID-k és kategóriák ettől még eltérhetnek.
+
+A kért FPS, eredeti FPS, az eredeti fájl útvonala/hash-e és az elemzett fájl hash-e is
+exportálódik. A kamera zónái és lámpabeállításai az eredeti forráshoz kötve megmaradnak;
+a pontossági referencia viszont továbbra is az adott elemzett fájlhoz kötött.
+A TrafficScene külön jelöli a ritkább mintavételt. Rövid lámpaváltás vagy gyors objektum kimaradhat.
+
+A másolat az `outputs/video-proxy-*` alatt cache-elt, ellenőrzőösszeggel vizsgált fájl.
+Első alkalommal az átkódolás időigénye is jelentkezik. Sikertelen konverzió nem módosítja
+az eredetit és nem ment félkész másolatot kész eredményként.
+
+Az IMG_6277 5 másodperces, 120 FPS-es mintáján, Villámgyors profillal:
+
+| Választás | Elemzett képkocka | Teljes idő, előkészítéssel | Videóidő | Megerősített ID |
+|---|---:|---:|---:|---:|
+| Eredeti | 600 | 60,46 s | 5,0 s | 38 |
+| 30 FPS | 150 | 15,25 s | 5,0 s | 32 |
+| 15 FPS | 75 | 8,31 s | 5,0 s | 26 |
+
+Ez közel 4× és 7,3× gyorsulás az adott futásban. A teljes képkockás eset első modellbetöltést
+is tartalmaz, a további esetek cache-ből indultak. Nincs független pontossági referencia;
+az eltérő ID-szám nem igazol pontosságjavulást. Mindhárom esetben egy kezdeti, zónához
+rendelt autó került a SUMO-ba és célba ért.
+
+A minden képkockás módban is gyorsult a számláló: az összesítés nem építi újra a teljes
+korábbi tracktörténetet képkockánként többször. Egy külön mikromérésben 2000 korábbi és
+1 aktív ID mellett 100 összesítés 0,460 s helyett 0,00055 s volt. Ez csak az összesítés
+ideje, nem a teljes YOLO-feldolgozás gyorsulási aránya.
+A CPU-szál- és batch-próba alapján nem vezettünk be általános thread- vagy batch-átállítást.
+A nagyobb gyorsulást itt a kifejezetten választott ritkább mintavétel adja.
+
+Mérési fájlok: `outputs/video-speed/comparison.json`, `counter-benchmark.json`, `benchmark.json`.
 
 ## Helyi mérések – 2026. november 7.
 
@@ -86,6 +135,26 @@ Az első éjszakai futás a Villámgyorsnál a Python/Ultralytics inicializálá
 emiatt annak teljes ideje nagyobb lett a Kiegyensúlyozotténál. Bemelegedett inferenciában
 és a második videón a Villámgyors volt gyorsabb. Ezek CLI-mérések, böngésző-előnézet nélkül.
 A feldolgozási FPS nem a forrás FPS-e vagy a kimeneti videó lejátszási sebessége.
+
+## Ismételt mérés – 2026. november 24.
+
+Ugyanaz a környezet, más terhelés nélkül, CLI-ből (`analyze-video --profile ...`).
+Bemenet: a `data/samples/demo/busy_intersection.mp4` (20 s, 600 képkocka).
+
+| Profil | Teljes idő | Feldolgozási FPS | Bemelegedett inferencia | Megerősített ID |
+|---|---:|---:|---:|---:|
+| Villámgyors | 38,7 s | 15,5 | 41 ms | 120 |
+| Kiegyensúlyozott | 56,2 s | 10,7 | 66 ms | 167 |
+
+A Részletes profil **külön, rövidebb bemeneten**: a fenti videó első 2 másodpercének
+átkódolt részlete (`busy_intersection-2s.mp4`, 60 képkocka) 49,2 s, 1,2 FPS, 724 ms bemelegedett inferencia,
+31 megerősített ID. A két 600 képkockás sorral nem összevethető; ugyanezen a 2 s-os
+részleten a november 7-i mérés a fenti táblázatban szerepel (68,68 s).
+
+Minden futásban a feldolgozott, a forrás- és a jelölt kimeneti videó képkockaszáma
+(FFprobe) megegyezett, és az ID-k 1-től indultak. A Villámgyors futás két külön
+indításban azonos ID-számot és kategóriabontást adott. Párhuzamosan futó SUMO-optimalizálás
+mellett ugyanez 98 s volt: a CPU-s mérés érzékeny a gép egyéb terhelésére.
 
 ## Felismerés és SUMO
 
@@ -124,6 +193,12 @@ A mostani eredmények Gitből kizárva az `outputs/profiles-validation/` alatt t
 `images.json`, `files.json`, `videos.json`, `cache-validation.json`, a két videóminta és
 a `runtime/outputs/` alatti jelölt eredmények/SUMO-futtatások. A referencia a korábbi
 `outputs/detection-audit/references.json`.
+A YOLO26l szeletelési összehasonlítása a `slicing/comparison.json` fájlban található.
+
+A teljes ellenőrzés 177 sikeres tesztet adott, hat opcionális modellteszt alapból kimaradt.
+Ezeket külön bekapcsolva mindhárom valódi modellel, JPG- és PNG-bemenettel is sikeresen
+futtattuk. A Ruff és a fordíthatósági ellenőrzés is sikeres. Memóriahiányra csak szimulált
+próba történt; CUDA-s inferenciát és hosszú videós terhelést nem ellenőriztünk.
 
 Érintett kód: `profiles.py`, `model_store.py`, `detection.py`, `video.py`, `live.py`, a meglévő
 dashboard és közös beállítópanel, valamint a CLI. Nem került be új függőség vagy SUMO-futtató.

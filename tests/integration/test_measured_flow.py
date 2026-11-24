@@ -245,6 +245,8 @@ def test_measurement_is_invalid_after_tracking_export_changes(measurement_fixtur
 def test_flow_dashboard_can_measure_a_saved_camera_profile(measurement_fixture):
     import shutil
 
+    pytest.importorskip("cv2")  # The tab previews and renders the line overlay with OpenCV.
+
     from streamlit.testing.v1 import AppTest
 
     analysis, _, measurement, _ = measurement_fixture
@@ -302,3 +304,30 @@ def test_scene_dashboard_replays_the_selected_measurement(measurement_fixture, m
         (Path(app.session_state["scene_bundle"]) / "demand.json").read_text(encoding="utf-8")
     )
     assert len(demand) == 22
+
+
+def test_flow_tab_switches_to_a_newly_processed_video(measurement_fixture):
+    import os
+    import shutil
+
+    from streamlit.testing.v1 import AppTest
+
+    analysis = measurement_fixture[0]
+    folders = {}
+    for name in ("video-new", "video-old"):  # The older result gets the newer mtime.
+        folder = project_root() / "outputs" / name
+        folder.mkdir(parents=True)
+        shutil.copy2(analysis, folder / "analysis.json")
+        shutil.copy2(analysis.parent / "observations.jsonl", folder / "observations.jsonl")
+        folders[name] = folder
+    os.utime(folders["video-new"] / "analysis.json", (1, 1))
+    app = AppTest.from_string(
+        "from smarttraffic_ai.config import project_root\n"
+        "from smarttraffic_ai.dashboard_flow import render_flow_tab\n"
+        "render_flow_tab(project_root())"
+    ).run()
+    assert app.selectbox(key="flow-analysis").value.parent.name == "video-old"
+    app.session_state["video_result"] = {"directory": str(folders["video-new"])}
+    app.run()
+    assert not app.exception
+    assert app.selectbox(key="flow-analysis").value.parent.name == "video-new"

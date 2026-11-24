@@ -18,3 +18,5 @@ data/samples/private/
 .idea/
 .vscode/
 .DS_Store
+# Pexels-mintak: a ToS tiltja az onallo tovabbterjesztest, beszerzes: data/README.md
+data/samples/demo/

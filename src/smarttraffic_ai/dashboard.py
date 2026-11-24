@@ -257,9 +257,15 @@ def main():
                     with st.spinner("Kép feldolgozása…"):
                         result_path = detect_file(root, path, mock, config=image_config)
                     st.session_state["detection"] = str(result_path)
+                    st.session_state["detection_upload"] = uploaded.name
                 except Exception as exc:
                     st.error(f"A képfeldolgozás nem sikerült: {exc}")
         if "detection" in st.session_state:
+            if uploaded and st.session_state.get("detection_upload") != uploaded.name:
+                st.info(
+                    "Az alábbi eredmény egy korábban feldolgozott képhez tartozik. "
+                    "Az új képhez kattints a Kép feldolgozása gombra."
+                )
             result_path = Path(st.session_state["detection"])
             result = DetectionResult.model_validate_json(result_path.read_text(encoding="utf-8"))
             st.image(str(result_path.parent / "annotated.png"), caption="Objektumok és régiók")
@@ -353,8 +359,13 @@ def main():
                 "Mentett eredmény", files, format_func=lambda p: p.parent.name
             )
             if st.button("Mentett eredmény megnyitása"):
+                # Kept in the session so a later download click does not close the result.
+                st.session_state["opened_result"] = str(selected_file)
+            opened = st.session_state.get("opened_result")
+            if opened:
                 try:
-                    result = json.loads(selected_file.read_text(encoding="utf-8"))
+                    result = json.loads(Path(opened).read_text(encoding="utf-8"))
+                    st.subheader(f"Megnyitott eredmény: {Path(opened).parent.name}")
                     if "best" in result:
                         show_comparison(result, "saved-comparison")
                     else:

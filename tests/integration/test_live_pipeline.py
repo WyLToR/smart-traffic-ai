@@ -245,11 +245,13 @@ def test_scene_selects_completed_live_and_can_reopen_saved_result(completed_live
 def test_interrupted_live_preserves_only_completed_observations(fake_live_source, monkeypatch):
     calls = 0
     original = live._objects
+    monkeypatch.setattr(live, "YoloDetector", lambda root, config: SimpleNamespace(config=config))
 
     def interrupted(*args):
         nonlocal calls
         calls += 1
         if calls == 5:
+            args[0].config = args[0].config.model_copy(update={"image_size": 640})
             raise RuntimeError("connection lost")
         return original(*args)
 
@@ -259,6 +261,7 @@ def test_interrupted_live_preserves_only_completed_observations(fake_live_source
     result = session.result
     assert result["error"] == "connection lost"
     assert result["frames"] == 4
+    assert result["config"]["image_size"] == 960
     records = [
         json.loads(line)
         for line in (Path(result["directory"]) / "observations.jsonl").read_text().splitlines()

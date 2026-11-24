@@ -22,6 +22,7 @@ class LightRegion(Model):
     id: str = Field(min_length=1, pattern=r"^[a-zA-Z0-9_-]+$")
     kind: Literal["vehicle", "pedestrian", "unknown"] = "unknown"
     bounds: tuple[float, float, float, float]
+    min_brightness: int = Field(default=100, ge=0, le=255)
 
     @model_validator(mode="after")
     def check_bounds(self):
@@ -40,7 +41,7 @@ def regions_for_video(root: Path, source_sha256: str) -> list[LightRegion]:
     return load_yaml(path, LightConfig).profiles.get(source_sha256, []) if path.is_file() else []
 
 
-def read_color(frame, bbox, kind="unknown") -> tuple[str, dict]:
+def read_color(frame, bbox, kind="unknown", min_brightness=100) -> tuple[str, dict]:
     """HSV evidence inside an already located signal; no type inference from color."""
     import cv2
     import numpy as np
@@ -53,7 +54,7 @@ def read_color(frame, bbox, kind="unknown") -> tuple[str, dict]:
         return "unknown", empty
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
     hue, sat, value = cv2.split(hsv)
-    bright = (sat >= 100) & (value >= 100)
+    bright = (sat >= 100) & (value >= min_brightness)
     masks = {
         "red": ((hue <= 12) | (hue >= 170)) & bright,
         "yellow": (hue >= 15) & (hue <= 37) & bright,
@@ -102,6 +103,7 @@ class LightAnalyzer:
                 "light_id": r.id,
                 "kind": r.kind,
                 "kind_source": "camera-config",
+                "min_brightness": r.min_brightness,
                 "bbox": (
                     r.bounds[0] * width,
                     r.bounds[1] * height,
@@ -147,7 +149,9 @@ class LightAnalyzer:
                     "last_seen_seconds": seconds,
                 },
             )
-            raw_state, pixels = read_color(frame, candidate["bbox"], candidate["kind"])
+            raw_state, pixels = read_color(
+                frame, candidate["bbox"], candidate["kind"], candidate.get("min_brightness", 100)
+            )
             record["streak"] = record["streak"] + 1 if raw_state == record["candidate"] else 1
             record["candidate"] = raw_state
             record["last_seen_seconds"] = seconds
@@ -211,7 +215,11 @@ def annotate_lights(image, lights):
         "red-yellow": (0, 150, 255),
         "unknown": (190, 190, 190),
     }
-    types = {"vehicle": "JARMU", "pedestrian": "GYALOGOS", "unknown": "TIPUS ?"}
+    types = {
+        "vehicle": "JARMUJELZO LAMPA",
+        "pedestrian": "GYALOGOSJELZO LAMPA",
+        "unknown": "LAMPA (TIPUS ?)",
+    }
     states = {
         "red": "PIROS",
         "green": "ZOLD",
@@ -222,9 +230,11 @@ def annotate_lights(image, lights):
     for light in lights:
         x1, y1, x2, y2 = map(int, light["bbox"])
         color = colors[light["state"]]
-        label = f"{light['light_id']} {types[light['kind']]} {states[light['state']]}"
+        label = f"{types[light['kind']]} | {states[light['state']]}"
         cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
-        left, top = max(0, x1), max(46, y1 - 7)
+        label_width = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)[0][0]
+        left = max(0, min(x1, image.shape[1] - label_width - 4))
+        top = max(46, y1 - 7)
         cv2.putText(
             image, label, (left, top), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 0), 3, cv2.LINE_AA
         )

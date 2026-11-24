@@ -1,0 +1,15 @@
+{
+  "camera_id": "img-6277",
+  "fixed_view_confirmed": false,
+  "reference_size": [1280, 720],
+  "zones": [
+    {"id": "far-lane", "direction": "E", "bounds": [0.04, 0.75, 0.73, 0.85]},
+    {"id": "near-lane", "direction": "W", "bounds": [0.04, 0.85, 0.73, 1.0]}
+  ],
+  "lines": [
+    {"id": "far-passage", "zone_id": "far-lane", "approach": "E", "start": [0.5, 0.75], "end": [0.5, 0.85], "inbound": "negative_to_positive", "role": "discharge"},
+    {"id": "near-passage", "zone_id": "near-lane", "approach": "W", "start": [0.5, 0.85], "end": [0.5, 1.0], "inbound": "positive_to_negative", "role": "discharge"}
+  ],
+  "window_seconds": 30,
+  "notes": "Az IMG_6277.MP4 saját felvétel kiinduló beállítása. A kamera kissé mozog; a téglalapok és vonalak ellenőrzendők, nincs igazolt pontosságmérés. A hátsó parkolósor többnyire a zónákon kívül marad, de a parkoló járművek kiszűrése nem automatikus. E/W a két látható menetirány virtuális SUMO-hozzárendelése, nem mért égtáj. A vonalak helyi áthaladást jelölnek, nem igazolt új beérkezést. A gyalogosok megfigyelése megmarad, de nem kerülnek gépjárműként a SUMO-ba."
+}

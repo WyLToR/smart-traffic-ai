@@ -7,20 +7,21 @@ A három profil a meglévő `DetectionConfig` sémára épül; részletek: [prof
 
 ## Telepítés
 
-Általános telepítés:
+Ajánlott, a lock szerinti telepítés (Windows alatt CPU-s PyTorch):
 
 ```bash
-uv pip install --python .venv/Scripts/python.exe -e ".[vision]"
+uv sync --locked --python 3.12 --extra dev --extra sumo --extra vision
 ```
 
-Python 3.12 alatt ellenőrzött CPU-s változat:
+A fejlesztői gépen korábban kézzel telepített, szintén ellenőrzött CPU-s változat:
 
 ```bash
 uv pip install --python .venv/Scripts/python.exe --no-cache torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cpu
 uv pip install --python .venv/Scripts/python.exe --no-cache -e ".[dev,sumo,vision]"
 ```
 
-A közös `uv.lock` ettől eltérő PyTorchot rögzíthet. A külön telepített környezetben `uv run --no-sync` használható; újraszinkronizálás után a fenti parancsokkal állítható vissza a CPU-s változat.
+A lock `torch 2.15.0`-t rögzít, a kézi út 2.7.1-et; mindkettővel lefut a teljes tesztkészlet.
+Kézi telepítés után `uv run --no-sync` használandó, különben a `uv` a lock szerinti változatra cseréli.
 
 A súlyfájlok a Gitből kizárt `models/` mappába kerülnek. A program csak kifejezett kérésre
 tölt le, a `download-model` paranccsal vagy a felület modellkezelő gombjával. A letöltés

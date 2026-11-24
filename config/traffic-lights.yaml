@@ -1,6 +1,16 @@
 # A profil az ellenőrzött videófájl SHA-256 lenyomatához kötött.
 # A típus kézi kamerabeállítás; a pillanatnyi színt a képből mérjük.
 profiles:
+  1eae04010fead2e10ce4b78c461e0103ccb2a1dd2aa4945870e6d1a0406fddc8:
+    - id: right-vehicle
+      kind: vehicle
+      bounds: [0.835, 0.24, 0.93, 0.51]
+      min_brightness: 200
+  8747e50d6bbb2f874961358d6ee84adf2d32a37b76784626f3b85465ee138f12:
+    - id: right-vehicle
+      kind: vehicle
+      bounds: [0.835, 0.24, 0.93, 0.51]
+      min_brightness: 200
   0880067fe1c79b31efba3fe9f22cb4bf75a6cdb27747d70ad8c76a5c54c729ca:
     - id: center-ped
       kind: pedestrian

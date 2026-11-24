@@ -37,6 +37,8 @@ Videónál az `observations.jsonl` minden képkocka idejét, időtartamát és n
 
 A szimulációs időhorizont a választott forgalmi idő és az alapból 5 másodperces beállási idő összege. A videó időablakai a választott forgalmi időre skálázódnak. Az intenzitás jármű/óra, és nem válik automatikusan mért értékké.
 
+Foglaltsággal súlyozott módban az alapérték jármű/óra/**megfigyelt ág**: az időablak teljes kerete az alapérték és a zónával vagy kézi hozzárendeléssel lefedett ágak számának szorzata, amelyet a megfigyelt gépjármű-foglaltság arányában osztunk szét. A kamerán nem látott ág nem kap érkezést, és a részét sem kapják meg a látott ágak. (2026. november 24. előtt a keretet a sablon összes ágának száma adta; két látott ágú négyágú csomópontnál ez a látott ágakon az alapérték kétszeresét eredményezte.)
+
 Ez a konfigurált/foglaltsági becslési ág időkezelése. A külön **mért eseményes mód** az eredeti videóidőt tartja meg: nincs átskálázás vagy Poisson-generálás. A kezdetben jelen lévő ID-k és a nem beérkezést mérő vonalak nem adnak új érkezést. A forráshoz kötött referenciaértékelés, kísérleti mód és kizárások leírása: [Videós forgalommérés](traffic-flow.md).
 
 ## Generált hálózat és forgalom

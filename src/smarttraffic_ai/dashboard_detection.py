@@ -63,27 +63,29 @@ def detection_settings(root: Path, key: str) -> DetectionConfig:
             "Az IoU-küszöb az NMS-t használó inferenciánál számít; "
             "az opcionális end-to-end fej nem végez ilyen elnyomást."
         )
-        if not (root / defaults.model_path).is_file():
-            st.info(f"A kiválasztott modell még nincs letöltve: {Path(defaults.model_path).name}.")
-            st.link_button(
-                "Hivatalos modellfájl", official_model_url(Path(defaults.model_path).name)
-            )
-            if st.button("Modell letöltése", key=f"{key}-download"):
-                try:
-                    with st.spinner("Modell letöltése és ellenőrzése…"):
-                        download_model(root, Path(defaults.model_path).name)
-                    st.rerun()
-                except Exception as exc:
-                    st.error(f"A modell letöltése nem sikerült: {exc}")
         if st.button("Modellcache ürítése", key=f"{key}-clear-models"):
             clear_model_cache()
             st.success(
-                "A nem használt modellpéldányok felszabadíthatók; a futó vizsgálat megmarad."
+                "A modellcache kiürült. A futó vizsgálat saját modellje használatban marad."
             )
         st.caption(
             f"Eszköz: {defaults.device}. A beállítások csak erre a feldolgozásra érvényesek. "
             "A személy és a kerékpár külön objektum; összegük nem egyedi közlekedőszám."
         )
+    if not (root / defaults.model_path).is_file():
+        # Outside the expander: otherwise the disabled start button has no visible reason.
+        st.warning(
+            f"A kiválasztott modell még nincs letöltve: {Path(defaults.model_path).name}. "
+            "Letöltés nélkül a feldolgozás nem indítható."
+        )
+        st.link_button("Hivatalos modellfájl", official_model_url(Path(defaults.model_path).name))
+        if st.button("Modell letöltése", key=f"{key}-download"):
+            try:
+                with st.spinner("Modell letöltése és ellenőrzése…"):
+                    download_model(root, Path(defaults.model_path).name)
+                st.rerun()
+            except Exception as exc:
+                st.error(f"A modell letöltése nem sikerült: {exc}")
     if not categories:
         st.warning("Legalább egy kategóriát válassz; addig a konfigurált kategóriákat használjuk.")
     return DetectionConfig.model_validate(

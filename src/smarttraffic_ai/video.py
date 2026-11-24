@@ -22,6 +22,7 @@ from smarttraffic_ai.detection import (
     YoloDetector,
     predict_frame,
 )
+from smarttraffic_ai.samples import validate_frame_count
 from smarttraffic_ai.simulation import output_directory, save_csv, save_json
 from smarttraffic_ai.traffic_lights import (
     LightAnalyzer,
@@ -65,6 +66,7 @@ class TrackCounter:
         self.min_visible_seconds = min_visible_seconds
         self.tracks: dict[int, Track] = {}
         self.current_ids: set[int] = set()
+        self.confirmed_counts: Counter = Counter()
         self.last_time = -1.0
 
     def update(self, seconds: float, duration: float, objects: list[TrackedObject]):
@@ -87,11 +89,18 @@ class TrackCounter:
         self.current_ids = set(unique)
         for obj in unique.values():
             track = self.tracks.setdefault(obj.track_id, Track(obj.track_id, seconds, seconds))
+            previous_category = track.category if self.is_confirmed(track) else None
             track.last_seen = seconds
             track.last_duration = duration
             track.visible_seconds += duration
             track.observations += 1
             track.votes[obj.category] += obj.confidence
+            category = track.category if self.is_confirmed(track) else None
+            if previous_category != category:
+                if previous_category is not None:
+                    self.confirmed_counts[previous_category] -= 1
+                if category is not None:
+                    self.confirmed_counts[category] += 1
 
     def is_confirmed(self, track):
         return (
@@ -107,17 +116,16 @@ class TrackCounter:
         ]
 
     def summary(self):
-        rows = self.rows()
-        current = self.rows(current_only=True)
+        current = Counter(
+            self.tracks[track_id].category
+            for track_id in self.current_ids
+            if self.is_confirmed(self.tracks[track_id])
+        )
         return {
-            "total_unique": len(rows),
-            "current_total": len(current),
-            "by_category": {
-                name: sum(row["category"] == name for row in rows) for name in TRAFFIC_CATEGORIES
-            },
-            "current_by_category": {
-                name: sum(row["category"] == name for row in current) for name in TRAFFIC_CATEGORIES
-            },
+            "total_unique": sum(self.confirmed_counts.values()),
+            "current_total": sum(current.values()),
+            "by_category": {name: self.confirmed_counts[name] for name in TRAFFIC_CATEGORIES},
+            "current_by_category": {name: current[name] for name in TRAFFIC_CATEGORIES},
         }
 
 
@@ -256,7 +264,9 @@ def process_video(
     on_progress: Callable | None = None,
     light_regions: list[LightRegion] | None = None,
     config: DetectionConfig | None = None,
+    analysis_fps: int | None = None,
 ) -> dict:
+    started = time.perf_counter()
     import cv2
 
     if path.suffix.lower() != ".mp4" or not path.is_file():
@@ -269,12 +279,20 @@ def process_video(
     config = config or load_yaml(root / "config/detection.yaml", DetectionConfig)
     with path.open("rb") as stream:
         input_sha = hashlib.file_digest(stream, "sha256").hexdigest()
+    original_path, original_sha = path, input_sha
+    from smarttraffic_ai.video_proxy import prepare_analysis_video
+
+    preparing_started = time.perf_counter()
+    path, sampling = prepare_analysis_video(root, path, input_sha, analysis_fps)
+    preparation_seconds = time.perf_counter() - preparing_started
+    if sampling["resampled"]:
+        with path.open("rb") as stream:
+            input_sha = hashlib.file_digest(stream, "sha256").hexdigest()
     lights = LightAnalyzer(
-        regions_for_video(root, input_sha) if light_regions is None else light_regions
+        regions_for_video(root, original_sha) if light_regions is None else light_regions
     )
     capture = cv2.VideoCapture(str(path))
     encoder = None
-    started = time.perf_counter()
     try:
         fps = capture.get(cv2.CAP_PROP_FPS)
         if not capture.isOpened() or not math.isfinite(fps) or fps <= 0:
@@ -287,6 +305,7 @@ def process_video(
         loading_started = time.perf_counter()
         detector = YoloDetector(root, config)
         timings = {
+            "proxy_prepare_seconds": preparation_seconds,
             "model_load_seconds": time.perf_counter() - loading_started,
             "decode_seconds": 0.0,
             "inference_seconds": 0.0,
@@ -306,7 +325,9 @@ def process_video(
             "track_high_thresh": high_threshold,
             "track_low_thresh": low_threshold,
             "new_track_thresh": high_threshold,
-            "track_buffer": 30,
+            "track_buffer": max(1, round(30 * fps / sampling["source_fps"]))
+            if sampling["resampled"]
+            else 30,
             "match_thresh": 0.8,
             "fuse_score": True,
         }
@@ -486,17 +507,21 @@ def process_video(
             encoder.stdin.close()
             if encoder.wait(timeout=60) != 0:
                 raise RuntimeError("Az FFmpeg hibával állt le; lásd encoder.log.")
-        if total_frames > 0 and index != total_frames:
-            raise ValueError(f"Hiányos dekódolás: {index}/{total_frames} képkocka olvasható.")
+        frame_count_note = validate_frame_count(root, input_sha, total_frames, index)
         final_path = partial.replace(directory / "annotated.mp4")
         result = {
-            "input_name": path.name,
+            "input_name": original_path.name,
             "input_path": str(path.resolve()),
             "input_sha256": input_sha,
+            "original_input_path": str(original_path.resolve()),
+            "original_input_sha256": original_sha,
+            "sampling": sampling,
             "fps": fps,
             "width": width,
             "height": height,
             "frames": index,
+            "container_frames": total_frames,
+            "frame_count_note": frame_count_note,
             "duration_seconds": seconds,
             "processing_seconds": time.perf_counter() - started,
             "timings": timings,

@@ -247,6 +247,11 @@ def _finish(
     intervals = occupancy or [
         OccupancyWindow(begin=0, end=1, mean_counts={d: dict(initial[d]) for d in DIRECTIONS})
     ]
+    # The per-approach prior applies to observed arms only; an arm outside the camera
+    # view must not hand its share to the visible ones.
+    observed_arms = {r.direction for r in settings.regions} | {
+        d for d in (*settings.object_directions.values(), *settings.track_directions.values()) if d
+    }
     windows = []
     warmup = settings.warmup_seconds
     if warmup:
@@ -272,7 +277,7 @@ def _finish(
             total = sum(totals.values())
             rates = {
                 d: (
-                    min(10000, settings.prior_rate * len(totals) * totals.get(d, 0) / total)
+                    min(10000, settings.prior_rate * len(observed_arms) * totals.get(d, 0) / total)
                     if total
                     else 0
                 )
@@ -483,7 +488,7 @@ def analyze_video(path: Path, settings: SceneSettings) -> TrafficScene:
             )
             if data.get("error"):
                 scene.assumptions.append("Megszakadt élő vizsgálat részeredménye.")
-        return scene
+        return _sampling_provenance(scene, data)
     # Reuse occupancy conversion for initial state, then attach exact measured events.
     temporary = settings.model_copy(update={"arrival_mode": "configured"})
     scene = _finish(
@@ -526,4 +531,19 @@ def analyze_video(path: Path, settings: SceneSettings) -> TrafficScene:
         payload["assumptions"].append(
             "KÍSÉRLETI MÓD: a számlálási pontosság/beérkezési értelmezés még nem igazolt."
         )
-    return TrafficScene.model_validate(payload)
+    return _sampling_provenance(TrafficScene.model_validate(payload), data)
+
+
+def _sampling_provenance(scene: TrafficScene, data: dict) -> TrafficScene:
+    sampling = data.get("sampling", {})
+    if sampling.get("resampled"):
+        scene.provenance["temporal_sampling"] = (
+            f"Kifejezetten választott {sampling['requested_fps']} FPS-es elemzési másolat; "
+            "a videó ideje nem gyorsított."
+        )
+        scene.provenance["original_source_sha256"] = data["original_input_sha256"]
+        scene.assumptions.append(
+            "A ritkább időbeli mintavétel rövid észleléseket és lámpaváltásokat hagyhat ki; "
+            "a tracking és az áthaladási mérés eltérhet a teljes képkockás feldolgozástól."
+        )
+    return scene

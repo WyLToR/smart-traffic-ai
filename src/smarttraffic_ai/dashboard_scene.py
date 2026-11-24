@@ -11,6 +11,8 @@ import streamlit as st
 
 from smarttraffic_ai.config import AppConfig, load_yaml
 from smarttraffic_ai.detection import CATEGORY_LABELS, MOTOR_VEHICLES, DetectionResult, Region
+from smarttraffic_ai.flow import CameraProfile
+from smarttraffic_ai.samples import sample_for_hash
 from smarttraffic_ai.scene import DIRECTIONS, SceneSettings, analyze_image, analyze_video
 from smarttraffic_ai.scene_sumo import compare_scene, generate_scene, run_scene
 
@@ -132,6 +134,23 @@ def render_scene_tab(root: Path, available: bool):
             "a régi példa-zónákat nem vesszük át automatikusan."
         )
         mapping = _mapping_editor(observation, source_key)
+        preset_zones = []
+        sample = (
+            sample_for_hash(root, data.get("original_input_sha256", data["input_sha256"]))
+            if video
+            else None
+        )
+        if sample and sample.camera_profile and (root / sample.camera_profile).is_file():
+            camera = CameraProfile.model_validate_json(
+                (root / sample.camera_profile).read_text(encoding="utf-8")
+            )
+            st.info(camera.notes)
+            if st.checkbox(
+                "A videóhoz előkészített zónák használata",
+                value=True,
+                key=f"scene-camera-{source_key}",
+            ):
+                preset_zones = camera.zones
         with st.expander("Megfigyelési zónák (normalizált koordináták)"):
             st.caption(
                 "A befoglaló téglalap alsó középpontja dönti el a zónát. "
@@ -139,7 +158,13 @@ def render_scene_tab(root: Path, available: bool):
             )
             columns = ["ID", "Irány", "Bal", "Fent", "Jobb", "Lent"]
             edited = st.data_editor(
-                pd.DataFrame(columns=columns),
+                pd.DataFrame(
+                    [
+                        dict(zip(columns, [zone.id, zone.direction, *zone.bounds], strict=True))
+                        for zone in preset_zones
+                    ],
+                    columns=columns,
+                ),
                 num_rows="dynamic",
                 hide_index=True,
                 key=f"scene-zones-{source_key}",

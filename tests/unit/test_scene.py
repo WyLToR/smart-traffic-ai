@@ -90,6 +90,8 @@ def test_video_uses_timestamped_occupancy_not_unique_ids_as_arrival_rate(tmp_pat
     assert scene.occupancy_windows[0].mean_counts["E"]["bus"] == pytest.approx(0.75)
     assert sum(scene.occupancy_windows[1].mean_counts["N"].values()) == 0
     assert scene.estimated_arrivals[1].rates["N"] > scene.estimated_arrivals[1].rates["E"]
+    # Only the two zoned arms share the per-arm prior; S and W are not observed.
+    assert sum(scene.estimated_arrivals[1].rates.values()) == pytest.approx(2 * settings.prior_rate)
     assert all(rate == 0 for rate in scene.estimated_arrivals[2].rates.values())
     assert "nem érkezésmérés" in scene.provenance["estimated_arrivals"]
     rows[-1]["seconds"] = -1

@@ -6,6 +6,7 @@ from pathlib import Path
 import streamlit as st
 
 from smarttraffic_ai.detection import CATEGORY_LABELS, TRAFFIC_CATEGORIES
+from smarttraffic_ai.samples import available_samples, video_digest
 from smarttraffic_ai.simulation import output_directory
 from smarttraffic_ai.traffic_lights import (
     KIND_LABELS,
@@ -60,7 +61,7 @@ def light_rows(lights):
 def configure_lights(root, path=None, source_key="live"):
     import pandas as pd
 
-    digest = hashlib.sha256(path.read_bytes() if path else source_key.encode()).hexdigest()
+    digest = video_digest(path) if path else hashlib.sha256(source_key.encode()).hexdigest()
     defaults = regions_for_video(root, digest) if path else []
     with st.expander("Lámpák és típusuk beállítása"):
         st.caption(
@@ -68,10 +69,16 @@ def configure_lights(root, path=None, source_key="live"):
             "járműjelzőt: a típust itt rendelheted hozzá a kijelölt területhez. "
             "A koordináták 0–1 közöttiek, a bal felső saroktól számítva."
         )
-        columns = ["ID", "Típus", "Bal", "Fent", "Jobb", "Lent"]
+        columns = ["ID", "Típus", "Bal", "Fent", "Jobb", "Lent", "Min. fényesség"]
         data = pd.DataFrame(
             [
-                dict(zip(columns, [r.id, KIND_LABELS[r.kind], *r.bounds], strict=True))
+                dict(
+                    zip(
+                        columns,
+                        [r.id, KIND_LABELS[r.kind], *r.bounds, r.min_brightness],
+                        strict=True,
+                    )
+                )
                 for r in defaults
             ],
             columns=columns,
@@ -90,8 +97,11 @@ def configure_lights(root, path=None, source_key="live"):
                     name: st.column_config.NumberColumn(
                         min_value=0.0, max_value=1.0, step=0.001, required=True
                     )
-                    for name in columns[2:]
+                    for name in columns[2:6]
                 },
+                "Min. fényesség": st.column_config.NumberColumn(
+                    min_value=0, max_value=255, step=1, default=100, required=True
+                ),
             },
         )
         reverse = {label: key for key, label in KIND_LABELS.items()}
@@ -99,7 +109,10 @@ def configure_lights(root, path=None, source_key="live"):
             LightRegion(
                 id=str(row["ID"]),
                 kind=reverse[row["Típus"]],
-                bounds=tuple(float(row[name]) for name in columns[2:]),
+                bounds=tuple(float(row[name]) for name in columns[2:6]),
+                min_brightness=int(row["Min. fényesség"])
+                if pd.notna(row["Min. fényesség"])
+                else 100,
             )
             for row in edited.to_dict("records")
             if pd.notna(row["ID"])
@@ -145,6 +158,15 @@ def show_video_result(result):
     from smarttraffic_ai.dashboard_detection import show_counts, show_processing
 
     st.subheader(f"Eredmény: {result['input_name']}")
+    sampling = result.get("sampling", {})
+    if sampling.get("resampled"):
+        st.info(
+            f"Választott elemzési változat: {sampling['requested_fps']} FPS "
+            f"az eredeti {sampling['source_fps']:.2f} FPS helyett. "
+            "A videó normál időben játszódik le; a követés eltérhet az eredeti képkockás módtól."
+        )
+    if result.get("frame_count_note"):
+        st.info(result["frame_count_note"])
     show_processing(
         result.get("config"),
         result.get("runtime"),
@@ -200,7 +222,7 @@ def show_video_result(result):
 
 def render_video_tab(root: Path, has_yolo: bool):
     st.write("Autók, buszok, teherautók, motorok, kerékpárok és gyalogosok követése.")
-    samples = sorted((root / "outputs/video-validation/videos").glob("*.mp4"))
+    samples = available_samples(root)
     source = st.radio(
         "Videó forrása",
         ["Feltöltés", "Mintavideó", "Élő forrás"] if samples else ["Feltöltés", "Élő forrás"],
@@ -220,7 +242,10 @@ def render_video_tab(root: Path, has_yolo: bool):
     uploaded = None
     path = None
     if source == "Mintavideó":
-        path = st.selectbox("Mintavideó", samples, format_func=lambda p: p.name)
+        sample = st.selectbox("Mintavideó", samples, format_func=lambda item: item.label)
+        path = root / sample.path
+        if sample.description:
+            st.caption(sample.description)
     else:
         uploaded = st.file_uploader("Közlekedési videó (MP4)", type=["mp4"], key="traffic-video")
         if uploaded is not None:
@@ -235,6 +260,22 @@ def render_video_tab(root: Path, has_yolo: bool):
             else:
                 path = Path(stored[1])
     light_regions = None
+    analysis_fps = st.selectbox(
+        "Elemzési képkockasebesség",
+        [None, 30, 15],
+        format_func=lambda value: (
+            "Eredeti – minden képkocka"
+            if value is None
+            else f"Legfeljebb {value} FPS – gyorsabb elemzés"
+        ),
+        key="video-analysis-fps",
+    )
+    if analysis_fps is not None:
+        st.caption(
+            "Magasabb FPS-es forrásnál külön elemzési másolat készül, az eredeti fájl megmarad. "
+            "Kevesebb időpillanatot vizsgálunk; "
+            "a gyors objektumok és rövid lámpaváltások kimaradhatnak."
+        )
     calibration_error = False
     if path is not None:
         try:
@@ -260,7 +301,14 @@ def render_video_tab(root: Path, has_yolo: bool):
         ),
     ):
         st.session_state.pop("video_result", None)
-        progress = st.progress(0.0, text="Videó megnyitása és modellbetöltés…")
+        progress = st.progress(
+            0.0,
+            text=(
+                f"Legfeljebb {analysis_fps} FPS-es elemzési változat előkészítése…"
+                if analysis_fps
+                else "Videó megnyitása és modellbetöltés…"
+            ),
+        )
         preview = st.empty()
         counts = st.empty()
         tracks = st.empty()
@@ -291,7 +339,12 @@ def render_video_tab(root: Path, has_yolo: bool):
 
         try:
             result = process_video(
-                root, path, on_progress=update, light_regions=light_regions, config=config
+                root,
+                path,
+                on_progress=update,
+                light_regions=light_regions,
+                config=config,
+                analysis_fps=analysis_fps,
             )
             st.session_state["video_result"] = result
             progress.progress(1.0, text="Az elemzés elkészült.")

@@ -591,7 +591,7 @@ class LiveSession:
                         fps=self.fps,
                         width=width,
                         height=height,
-                        config=getattr(detector, "config", config).model_dump(),
+                        config=self.event.get("config") or config.model_dump(),
                         directory=str(directory),
                         error=self.error,
                     )

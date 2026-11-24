@@ -38,6 +38,12 @@ def main(argv=None) -> int:
     command = sub.add_parser("analyze-video", help="MP4 követése, számlálás és láthatósági idők")
     command.add_argument("--input", required=True, help="MP4-videó elérési útja")
     command.add_argument("--profile", choices=["fast", "balanced", "detailed"])
+    command.add_argument(
+        "--analysis-fps",
+        type=int,
+        choices=[15, 30],
+        help="Külön 15/30 FPS-es elemzési változat; az eredeti fájl megmarad",
+    )
     command = sub.add_parser(
         "download-model", help="Hivatalos YOLO-modell letöltése és ellenőrzése"
     )
@@ -78,6 +84,9 @@ def main(argv=None) -> int:
     )
     sub.add_parser("dashboard", help="Magyar Streamlit-felület indítása")
     args = parser.parse_args(argv)
+    # Redirected output uses the ANSI code page on Windows; cp1252 has no "ő"/"ű".
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="backslashreplace")
     try:
         root = project_root()
         profile_config = None
@@ -126,7 +135,9 @@ def main(argv=None) -> int:
 
             from smarttraffic_ai.video import process_video
 
-            result = process_video(root, Path(args.input), config=profile_config)
+            result = process_video(
+                root, Path(args.input), config=profile_config, analysis_fps=args.analysis_fps
+            )
             print(f"Összes követett ID: {result['summary']['total_unique']}")
             print(f"Eredmények: {result['directory']}")
         elif args.command == "download-model":
